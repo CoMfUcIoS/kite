@@ -93,9 +93,35 @@ as your last fetch. The footer says how stale that is. `update` refreshes it.
 ## Install
 
 ```
-go install .
+go install .                                   # from a checkout
+go install github.com/comfucios/kite@latest    # from the latest tag
 ```
 
 Standard library only, no third-party dependencies. `git` is required; kite exits
 with install instructions if it isn't on your PATH. `gh` is optional and only
 powers the two PR columns.
+
+`kite --version` reports the module version Go stamps into the binary, so a
+tagged install prints its tag and a local build prints its revision.
+
+## Releases
+
+Releases are automated with [release-please](https://github.com/googleapis/release-please).
+Commit messages on `main` must follow
+[Conventional Commits](https://www.conventionalcommits.org/), because that is what
+decides the next version:
+
+| Commit prefix | Effect |
+| --- | --- |
+| `fix:` | patch bump, listed under Bug Fixes |
+| `feat:` | minor bump, listed under Features |
+| `feat!:` or a `BREAKING CHANGE:` footer | minor bump while below 1.0, major after |
+| `chore:`, `docs:`, `refactor:`, `test:` | no release, no changelog entry |
+
+On every push to `main` the workflow opens or updates a single release PR titled
+`chore(main): release kite X.Y.Z`, carrying the version bump and the generated
+`CHANGELOG.md`. Merging that PR is what creates the git tag and the GitHub
+release. Nothing is tagged until you merge it.
+
+The first release is pinned to `0.1.0` via `initial-version`; without it
+release-please starts at `1.0.0`.
