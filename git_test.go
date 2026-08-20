@@ -363,6 +363,9 @@ func TestParseArgs(t *testing.T) {
 		{args: []string{"--no-pr", "--root", "/tmp/x"}, want: opts{cmd: "status", root: "/tmp/x", noPR: true}},
 		{args: []string{"status", "--no-pr"}, want: opts{cmd: "status", noPR: true}},
 		{args: []string{"--help"}, want: opts{cmd: "help"}},
+		{args: []string{"--version"}, want: opts{cmd: "version"}},
+		// A bare command wins over being read as a filter.
+		{args: []string{"version"}, want: opts{cmd: "version"}},
 		{args: []string{"--root"}, wantErr: true},
 		{args: []string{"--root="}, wantErr: true},
 		{args: []string{"--bogus"}, wantErr: true},
@@ -470,5 +473,15 @@ func TestRenderGridRawTrailingCell(t *testing.T) {
 	want := "a   short             free text here\nbb  much longer cell  x\n"
 	if got := b.String(); got != want {
 		t.Errorf("renderGrid with raw cells =\n%q\nwant\n%q", got, want)
+	}
+}
+
+func TestVersion(t *testing.T) {
+	got := version()
+	if got == "" {
+		t.Fatal("version() returned empty string")
+	}
+	if strings.ContainsAny(got, " \t\n") {
+		t.Errorf("version() = %q, want a single token", got)
 	}
 }

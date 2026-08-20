@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"time"
@@ -25,6 +26,7 @@ filter matches a repo name or current branch name, case-insensitively.
 flags:
   --root <dir>             directory holding the repos (default: current directory)
   --no-pr                  skip the GitHub PR and CI lookups
+  --version                print the version
   -h, --help               this text
 
 the PR and CI columns appear only when there is something to put in them, so a
@@ -44,8 +46,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "kite: %v\n\n%s", err, usage)
 		os.Exit(2)
 	}
-	if o.cmd == "help" {
+	switch o.cmd {
+	case "help":
 		fmt.Print(usage)
+		return
+	case "version":
+		fmt.Println("kite", version())
 		return
 	}
 	requireGit()
@@ -80,6 +86,38 @@ func main() {
 	printTable(os.Stdout, repos, o.cmd == "update", note)
 }
 
+// version reports the module version Go stamps into the binary. Installed with
+// `go install ...@v0.1.0` that is the tag; built from a working tree Go records
+// no version, so fall back to the VCS revision it stamps instead. Nothing here
+// needs bumping at release time, so release-please has no version file to edit.
+func version() string {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	if v := bi.Main.Version; v != "" && v != "(devel)" {
+		return v
+	}
+	rev, dirty := "", ""
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+			if len(rev) > 7 {
+				rev = rev[:7]
+			}
+		case "vcs.modified":
+			if s.Value == "true" {
+				dirty = "-dirty"
+			}
+		}
+	}
+	if rev == "" {
+		return "devel"
+	}
+	return "devel+" + rev + dirty
+}
+
 // requireGit stops before doing anything if git is missing. Every single thing
 // kite reports comes from shelling out to git, so there is no degraded mode.
 func requireGit() {
@@ -105,6 +143,8 @@ func parseArgs(args []string) (opts, error) {
 			o.noPR = true
 		case a == "-h", a == "--help", a == "help":
 			return opts{cmd: "help"}, nil
+		case a == "--version", a == "-version", a == "version":
+			return opts{cmd: "version"}, nil
 		case a == "--root", a == "-root":
 			if i+1 >= len(args) {
 				return o, fmt.Errorf("%s needs a directory", a)
