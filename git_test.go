@@ -344,3 +344,131 @@ func TestPlural(t *testing.T) {
 		}
 	}
 }
+
+func TestParseArgs(t *testing.T) {
+	tests := []struct {
+		args    []string
+		want    opts
+		wantErr bool
+	}{
+		{args: nil, want: opts{cmd: "status"}},
+		{args: []string{"UP-5731"}, want: opts{cmd: "status", filter: "UP-5731"}},
+		{args: []string{"update"}, want: opts{cmd: "update"}},
+		{args: []string{"update", "kite"}, want: opts{cmd: "update", filter: "kite"}},
+		{args: []string{"--root", "/tmp/x"}, want: opts{cmd: "status", root: "/tmp/x"}},
+		{args: []string{"--root=/tmp/x"}, want: opts{cmd: "status", root: "/tmp/x"}},
+		{args: []string{"-root=/tmp/x"}, want: opts{cmd: "status", root: "/tmp/x"}},
+		// A filter after the flag's value must not be swallowed by it.
+		{args: []string{"--root", "/tmp/x", "update", "api"}, want: opts{cmd: "update", filter: "api", root: "/tmp/x"}},
+		{args: []string{"--no-pr", "--root", "/tmp/x"}, want: opts{cmd: "status", root: "/tmp/x", noPR: true}},
+		{args: []string{"status", "--no-pr"}, want: opts{cmd: "status", noPR: true}},
+		{args: []string{"--help"}, want: opts{cmd: "help"}},
+		{args: []string{"--root"}, wantErr: true},
+		{args: []string{"--root="}, wantErr: true},
+		{args: []string{"--bogus"}, wantErr: true},
+	}
+	for _, tc := range tests {
+		got, err := parseArgs(tc.args)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("parseArgs(%q) = %+v, want error", tc.args, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("parseArgs(%q): %v", tc.args, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("parseArgs(%q) = %+v, want %+v", tc.args, got, tc.want)
+		}
+	}
+}
+
+func TestRootDirDefaultsToWorkingDirectory(t *testing.T) {
+	if got := rootDir("/tmp/somewhere"); got != "/tmp/somewhere" {
+		t.Errorf("rootDir(flag) = %q, want the flag value", got)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := rootDir(""); got != wd {
+		t.Errorf("rootDir(\"\") = %q, want the working directory %q", got, wd)
+	}
+}
+
+// Someone without gh installed or authenticated gets no PR data, so they must
+// not see two dead columns.
+func TestPrintTableHidesPRColumnsWithNoData(t *testing.T) {
+	colorOn = false
+	repos := []Repo{{Name: "prometheus", Branch: "main", Default: "main"}}
+
+	var b bytes.Buffer
+	printTable(&b, repos, false, "")
+	out := b.String()
+
+	for _, col := range []string{"PR", "CI"} {
+		if strings.Contains(out, col) {
+			t.Errorf("header still shows %s with no PR data:\n%s", col, out)
+		}
+	}
+}
+
+func TestPrintTableShowsPRColumnsWhenPopulated(t *testing.T) {
+	colorOn = false
+	repos := []Repo{
+		{Name: "prometheus", Branch: "main", Default: "main"},
+		{Name: "grafana", Branch: "feat/retry-backoff", Default: "main", PR: &PR{Number: 4211, CI: ciFail}},
+	}
+
+	var b bytes.Buffer
+	printTable(&b, repos, false, "")
+	out := b.String()
+
+	for _, want := range []string{"PR", "CI", "#4211", "✗"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// A PR with no checks at all should show the PR column but not a dead CI column.
+func TestPrintTableHidesCIWhenNoChecks(t *testing.T) {
+	colorOn = false
+	repos := []Repo{{Name: "vault", Branch: "fix/1234-nil-deref", Default: "main", PR: &PR{Number: 77}}}
+
+	var b bytes.Buffer
+	printTable(&b, repos, false, "")
+	out := b.String()
+
+	if !strings.Contains(out, "#77") {
+		t.Errorf("PR column missing:\n%s", out)
+	}
+	if strings.Contains(out, "CI") {
+		t.Errorf("CI column shown with no check data:\n%s", out)
+	}
+}
+
+func TestPrintTableFooterNote(t *testing.T) {
+	colorOn = false
+	var b bytes.Buffer
+	printTable(&b, []Repo{{Name: "etcd", Branch: "main", Default: "main"}}, false, "gh not installed, PR columns hidden")
+	if !strings.Contains(b.String(), "gh not installed") {
+		t.Errorf("footer note missing:\n%s", b.String())
+	}
+}
+
+func TestRenderGridRawTrailingCell(t *testing.T) {
+	colorOn = false
+	var b bytes.Buffer
+	renderGrid(&b, [][]cell{
+		{txt("a"), txt("short"), rawCell("free text here")},
+		{txt("bb"), txt("much longer cell"), rawCell("x")},
+	}, 2)
+	// The raw cell must not be padded out to match the other row's raw cell.
+	want := "a   short             free text here\nbb  much longer cell  x\n"
+	if got := b.String(); got != want {
+		t.Errorf("renderGrid with raw cells =\n%q\nwant\n%q", got, want)
+	}
+}

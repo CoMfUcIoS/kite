@@ -310,11 +310,12 @@ type ghPR struct {
 }
 
 // attachPRs looks up the open PR for every repo sitting on a non-default
-// branch. Anything that goes wrong leaves the columns blank; a missing gh, a
-// stale token or a slow API must never cost you the rest of the table.
-func attachPRs(repos []Repo) {
+// branch, and reports whether gh was even available. Anything that goes wrong
+// leaves the columns blank; a missing gh, a stale token or a slow API must
+// never cost you the rest of the table.
+func attachPRs(repos []Repo) (ghFound bool) {
 	if _, err := exec.LookPath("gh"); err != nil {
-		return
+		return false
 	}
 	fan(len(repos), func(i int) {
 		r := &repos[i]
@@ -323,6 +324,7 @@ func attachPRs(repos []Repo) {
 		}
 		r.PR = fetchPR(r.Path, r.Branch)
 	})
+	return true
 }
 
 func fetchPR(dir, branch string) *PR {
