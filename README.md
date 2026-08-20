@@ -92,17 +92,35 @@ as your last fetch. The footer says how stale that is. `update` refreshes it.
 
 ## Install
 
+```sh
+curl -fsSL https://raw.githubusercontent.com/comfucios/kite/main/install.sh | sh
 ```
+
+That grabs the latest release for your OS and architecture, updates an older copy
+in place, and does nothing at all if you already have the newest one. Run it again
+any time to update. macOS and Linux, amd64 and arm64.
+
+```sh
+# somewhere other than ~/.local/bin
+KITE_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/comfucios/kite/main/install.sh | sh
+
+# pin an exact release
+KITE_VERSION=v0.1.0 curl -fsSL https://raw.githubusercontent.com/comfucios/kite/main/install.sh | sh
+```
+
+Or with a Go toolchain:
+
+```sh
+go install github.com/comfucios/kite@latest    # latest tag
 go install .                                   # from a checkout
-go install github.com/comfucios/kite@latest    # from the latest tag
 ```
 
 Standard library only, no third-party dependencies. `git` is required; kite exits
 with install instructions if it isn't on your PATH. `gh` is optional and only
 powers the two PR columns.
 
-`kite --version` reports the module version Go stamps into the binary, so a
-tagged install prints its tag and a local build prints its revision.
+`kite --version` reports the release tag for an installed build, or the git
+revision for one built from a checkout.
 
 ## Releases
 

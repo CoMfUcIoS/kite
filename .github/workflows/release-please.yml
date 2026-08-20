@@ -17,11 +17,25 @@ concurrency:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
     steps:
       # Pinned to the v5.0.0 commit rather than the moving v5 tag.
-      # Releases made with the default GITHUB_TOKEN do not trigger other
-      # workflows, so anything that should run on a new tag needs a PAT here.
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        id: release
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # A release created with the default GITHUB_TOKEN does not fire an `on:
+  # release` workflow, so the binaries are built as a second job of this same
+  # run rather than by a separate trigger. No PAT needed.
+  assets:
+    needs: release-please
+    if: needs.release-please.outputs.released == 'true'
+    uses: ./.github/workflows/release-assets.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag }}
+    permissions:
+      contents: write

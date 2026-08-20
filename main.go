@@ -86,11 +86,20 @@ func main() {
 	printTable(os.Stdout, repos, o.cmd == "update", note)
 }
 
+// buildVersion is set with -ldflags "-X main.buildVersion=v1.2.3" by the
+// release workflow. A binary cross-compiled from a checkout carries no module
+// version, so without this stamp a released build would report its revision
+// instead of its tag, and the installer compares tags.
+var buildVersion string
+
 // version reports the module version Go stamps into the binary. Installed with
 // `go install ...@v0.1.0` that is the tag; built from a working tree Go records
 // no version, so fall back to the VCS revision it stamps instead. Nothing here
 // needs bumping at release time, so release-please has no version file to edit.
 func version() string {
+	if buildVersion != "" {
+		return buildVersion
+	}
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
 		return "unknown"

@@ -485,3 +485,13 @@ func TestVersion(t *testing.T) {
 		t.Errorf("version() = %q, want a single token", got)
 	}
 }
+
+func TestVersionPrefersBuildStamp(t *testing.T) {
+	old := buildVersion
+	t.Cleanup(func() { buildVersion = old })
+
+	buildVersion = "v9.9.9"
+	if got := version(); got != "v9.9.9" {
+		t.Errorf("version() = %q, want the ldflags stamp v9.9.9", got)
+	}
+}

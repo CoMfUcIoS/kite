@@ -1,0 +1,52 @@
+name: release-assets
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: release tag to build and attach binaries to
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: release tag to build and attach binaries to
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # No cgo anywhere in kite, so plain cross-compilation covers every target.
+      # The tag is stamped in because a build from a checkout has no module version.
+      - name: cross-compile
+        run: |
+          set -eu
+          mkdir -p dist
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            os=${target%/*}
+            arch=${target#*/}
+            CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build \
+              -trimpath -ldflags "-s -w -X main.buildVersion=$TAG" \
+              -o "dist/kite_${os}_${arch}" .
+          done
+          (cd dist && sha256sum kite_* > checksums.txt)
+          cat dist/checksums.txt
+
+      - name: attach to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" dist/* --clobber
