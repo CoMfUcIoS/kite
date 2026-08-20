@@ -28,11 +28,17 @@ forgotten stashes and a PR still running.
 kite [filter]            status table
 kite status [filter]     same, explicit
 kite update [filter]     fetch, fast-forward every default branch, then the table
+kite prune [filter]      list finished local branches; --delete removes them
+kite stash [filter]      every stash across every repo, with age and subject
+kite path [filter]       print one repo path, for: cd $(kite path api)
 ```
 
 ```
 --root <dir>             directory holding the repos (default: current directory)
---no-pr                  skip the GitHub PR and CI lookups
+--no-pr                  skip the GitHub lookups
+--delete                 prune only: actually delete the branches
+--force                  prune only: also delete branches whose merge is unconfirmed
+--version                print the version
 -h, --help               usage
 ```
 
@@ -71,6 +77,76 @@ reported and skipped rather than rewritten.
 
 It never forces, stashes, switches branches, or rebases. No code path can lose
 uncommitted work.
+
+## Pruning finished branches
+
+```
+$ kite prune
+caddy       feat/http3-probe    PR #3076 merged                   would delete
+caddy       fix/1234-nil-deref  PR #3065 merged                   would delete
+etcd        chore/bump-deps     merged into main                  would delete
+grafana     spike/new-parser    upstream gone, merge unconfirmed  needs --force
+prometheus  release/v3          checked out here                  skipped
+
+3 would delete · 1 needs --force · 1 checked out · nothing changed (kite prune --delete)
+```
+
+Dry run by default. `kite prune --delete` does the work.
+
+The reason this is not a one-line `git branch --merged` wrapper: **a squash merge
+leaves no ancestry.** The branch's commits never become ancestors of `main`, so
+git reports it as unmerged and you keep it forever. The signal that actually
+identifies a squash-merged branch is its deleted remote counterpart, which only
+appears as `[gone]` after a `git fetch --prune`. In the workspace this was
+built against, that distinction accounted for two thirds of the dead branches.
+
+But a vanished upstream is not proof of a merge either: closing a pull request
+without merging also deletes its branch, and that branch may hold the only copy
+of the work. So there are three tiers:
+
+| What kite found | What it does |
+| --- | --- |
+| an ancestor of the default branch | deletes with `git branch -d`, so git double-checks |
+| upstream gone, and `gh` confirms a merged PR | deletes with `-D` |
+| upstream gone, no merged PR found | reports it, needs `--force` |
+
+The checked-out branch is never deleted, not even with `--force`, because
+removing it would mean switching away and kite never switches branches.
+
+## Finding forgotten work
+
+```
+$ kite stash
+REPO     STASH      AGE             SUBJECT
+caddy    stash@{0}  7 days ago      WIP on main: fix(1201): drop the retry ceiling
+grafana  stash@{0}  32 minutes ago  WIP on feat/retry-backoff: half-finished jitter
+grafana  stash@{1}  2 days ago      WIP on feat/retry-backoff: first attempt, superseded
+
+3 stashes · git -C <repo> stash show -p <ref>
+```
+
+The status table gives you a stash *count*. A count cannot tell you whether that
+is twenty minutes of work or a week-old dead end. This can.
+
+## Jumping between repos
+
+```
+$ cd $(kite path grafana)
+```
+
+A process cannot change its parent's directory, so there is no `kite cd`. `path`
+prints the directory instead and lets the shell do the moving. It matches repo
+names only, which means it needs no git calls at all and returns instantly.
+
+If the filter matches more than one repo it fails rather than printing a list,
+because handing `cd` two arguments produces an error that explains nothing:
+
+```
+$ kite path agent
+kite: 2 repos match "agent", be more specific:
+        grafana-agent
+        prometheus-agent
+```
 
 ## Columns
 

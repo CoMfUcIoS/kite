@@ -314,7 +314,7 @@ type ghPR struct {
 // leaves the columns blank; a missing gh, a stale token or a slow API must
 // never cost you the rest of the table.
 func attachPRs(repos []Repo) (ghFound bool) {
-	if _, err := exec.LookPath("gh"); err != nil {
+	if !ghAvailable() {
 		return false
 	}
 	fan(len(repos), func(i int) {
@@ -382,4 +382,214 @@ func verdict(c ghCheck) string {
 		return ciPass
 	}
 	return ciPending
+}
+
+// --- prune ---
+
+// Branch is a local branch that looks finished: either already merged into the
+// default branch, or its remote counterpart is gone.
+type Branch struct {
+	Repo    string
+	Path    string
+	Name    string
+	Default string
+
+	Merged   bool // an ancestor of origin/<default>
+	Gone     bool // upstream branch deleted
+	PRNumber int  // a merged PR for this branch, 0 when none or unknown
+	Current  bool // checked out here, so it cannot be deleted without switching
+
+	Err error
+}
+
+// Prune verdicts.
+const (
+	pruneMerged  = "merged"
+	prunePR      = "pr-merged"
+	pruneUnsure  = "unverified"
+	pruneCurrent = "current"
+	pruneErr     = "error"
+)
+
+func (b Branch) verdict() string {
+	switch {
+	case b.Err != nil:
+		return pruneErr
+	case b.Current:
+		// Deleting the checked-out branch means switching away from it, and
+		// kite never switches branches.
+		return pruneCurrent
+	case b.Merged:
+		return pruneMerged
+	case b.PRNumber > 0:
+		return prunePR
+	}
+	return pruneUnsure
+}
+
+// deletable answers whether kite is willing to delete this branch. An upstream
+// that merely vanished is not proof of a merge: closing a pull request without
+// merging also deletes its branch, and that branch still holds the only copy of
+// the work. Those need force.
+func (b Branch) deletable(force bool) bool {
+	switch b.verdict() {
+	case pruneMerged, prunePR:
+		return true
+	case pruneUnsure:
+		return force
+	}
+	return false
+}
+
+func staleBranchesAll(repos []Repo, useGH bool) []Branch {
+	perRepo := make([][]Branch, len(repos))
+	fan(len(repos), func(i int) { perRepo[i] = staleBranches(repos[i]) })
+
+	var all []Branch
+	for _, bs := range perRepo {
+		all = append(all, bs...)
+	}
+
+	// Only the ambiguous ones are worth a network call.
+	if useGH && ghAvailable() {
+		fan(len(all), func(i int) {
+			b := &all[i]
+			if b.Gone && !b.Merged && !b.Current {
+				b.PRNumber = mergedPR(b.Path, b.Name)
+			}
+		})
+	}
+	return all
+}
+
+// staleBranches fetches with --prune first, because the "[gone]" marker that
+// identifies a squash-merged branch only appears once the deleted remote branch
+// has been pruned locally.
+func staleBranches(r Repo) []Branch {
+	fail := func(err error) []Branch {
+		return []Branch{{Repo: r.Name, Path: r.Path, Err: err}}
+	}
+	if r.Err != nil {
+		return fail(r.Err)
+	}
+	if _, err := git(r.Path, "fetch", "--prune", "--quiet", "origin"); err != nil {
+		return fail(err)
+	}
+	def := defaultBranch(r.Path)
+	if def == "" {
+		return nil
+	}
+
+	out, err := git(r.Path, "for-each-ref",
+		"--format=%(refname:short)%00%(upstream:track)%00%(HEAD)", "refs/heads")
+	if err != nil {
+		return fail(err)
+	}
+
+	var branches []Branch
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Split(line, "\x00")
+		if len(fields) < 3 || fields[0] == "" || fields[0] == def {
+			continue
+		}
+		b := Branch{
+			Repo:    r.Name,
+			Path:    r.Path,
+			Name:    fields[0],
+			Default: def,
+			Gone:    fields[1] == "[gone]",
+			Current: strings.TrimSpace(fields[2]) == "*",
+		}
+		// A squash merge leaves no ancestry, which is exactly why the Gone
+		// check above carries most of the weight.
+		if _, err := git(r.Path, "merge-base", "--is-ancestor", b.Name, "origin/"+def); err == nil {
+			b.Merged = true
+		}
+		if b.Merged || b.Gone {
+			branches = append(branches, b)
+		}
+	}
+	return branches
+}
+
+func deleteBranch(b Branch) error {
+	// Ancestry-merged branches go through -d so git double-checks us. The rest
+	// need -D, because a squash merge leaves nothing for -d to verify.
+	flag := "-D"
+	if b.Merged {
+		flag = "-d"
+	}
+	_, err := git(b.Path, "branch", flag, b.Name)
+	return err
+}
+
+// --- stashes ---
+
+type Stash struct {
+	Repo    string
+	Ref     string
+	Age     string
+	Subject string
+}
+
+func stashesAll(repos []Repo) []Stash {
+	perRepo := make([][]Stash, len(repos))
+	fan(len(repos), func(i int) { perRepo[i] = stashList(repos[i]) })
+
+	var all []Stash
+	for _, ss := range perRepo {
+		all = append(all, ss...)
+	}
+	return all
+}
+
+func stashList(r Repo) []Stash {
+	if r.Err != nil {
+		return nil
+	}
+	// NUL separators: a stash subject is a commit message and can contain
+	// anything printable, including whatever delimiter looked safe.
+	out, err := git(r.Path, "stash", "list", "--format=%gd%x00%cr%x00%s")
+	if err != nil || out == "" {
+		return nil
+	}
+
+	var stashes []Stash
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Split(line, "\x00")
+		if len(fields) < 3 {
+			continue
+		}
+		stashes = append(stashes, Stash{
+			Repo: r.Name, Ref: fields[0], Age: fields[1], Subject: fields[2],
+		})
+	}
+	return stashes
+}
+
+// --- shared gh helpers ---
+
+func ghAvailable() bool {
+	_, err := exec.LookPath("gh")
+	return err == nil
+}
+
+// mergedPR returns the number of a merged pull request for this branch, or 0.
+func mergedPR(dir, branch string) int {
+	ctx, cancel := context.WithTimeout(context.Background(), prTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
+		"--head", branch, "--state", "merged", "--limit", "1", "--json", "number")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return 0
+	}
+
+	var list []ghPR
+	if json.Unmarshal(out, &list) != nil || len(list) == 0 {
+		return 0
+	}
+	return list[0].Number
 }

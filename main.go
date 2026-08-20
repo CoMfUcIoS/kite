@@ -7,7 +7,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -20,12 +22,19 @@ usage:
   kite [filter]            status table (default command)
   kite status [filter]     same, explicit
   kite update [filter]     fetch, fast-forward every default branch, then the table
+  kite prune [filter]      list finished local branches; --delete removes them
+  kite stash [filter]      every stash across every repo, with age and subject
+  kite path [filter]       print one repo path, for: cd $(kite path api)
 
-filter matches a repo name or current branch name, case-insensitively.
+filter matches a repo name or current branch name, case-insensitively. The
+exception is path, which matches repo names only so it needs no git calls, and
+which fails rather than print an ambiguous list a filter cannot narrow to one.
 
 flags:
   --root <dir>             directory holding the repos (default: current directory)
-  --no-pr                  skip the GitHub PR and CI lookups
+  --no-pr                  skip the GitHub lookups
+  --delete                 prune only: actually delete the branches
+  --force                  prune only: also delete branches whose merge is unconfirmed
   --version                print the version
   -h, --help               this text
 
@@ -34,11 +43,15 @@ machine without gh installed or authenticated simply does not show them.
 `
 
 type opts struct {
-	cmd    string // "status", "update" or "help"
+	cmd    string // status, update, prune, stash, path, version or help
 	filter string
 	root   string
 	noPR   bool
+	delete bool
+	force  bool
 }
+
+var commands = []string{"status", "update", "prune", "stash", "path"}
 
 func main() {
 	o, err := parseArgs(os.Args[1:])
@@ -65,6 +78,29 @@ func main() {
 		os.Exit(1)
 	}
 
+	// path answers from directory names alone, so it stays instant. Everything
+	// else needs the per-repo git calls.
+	if o.cmd == "path" {
+		matches := repoPaths(paths, o.filter)
+		switch {
+		case len(matches) == 0:
+			fmt.Fprintf(os.Stderr, "kite: no repo name matching %q in %s\n", o.filter, root)
+			os.Exit(1)
+		case len(matches) > 1 && o.filter != "":
+			// An ambiguous filter would hand `cd` several arguments, and the
+			// resulting shell error says nothing useful. Fail clearly instead.
+			fmt.Fprintf(os.Stderr, "kite: %d repos match %q, be more specific:\n", len(matches), o.filter)
+			for _, p := range matches {
+				fmt.Fprintf(os.Stderr, "        %s\n", filepath.Base(p))
+			}
+			os.Exit(1)
+		}
+		for _, p := range matches {
+			fmt.Println(p)
+		}
+		return
+	}
+
 	// Collect locally first so the filter can match on branch name before we
 	// spend any network calls on repos we are about to drop.
 	repos := filterRepos(collectAll(paths), o.filter)
@@ -73,7 +109,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	if o.cmd == "update" {
+	switch o.cmd {
+	case "prune":
+		printPrune(os.Stdout, staleBranchesAll(repos, !o.noPR), o.delete, o.force)
+		return
+	case "stash":
+		printStashes(os.Stdout, stashesAll(repos))
+		return
+	case "update":
 		printUpdates(os.Stdout, updateAll(repos))
 		fmt.Println()
 		repos = collectAll(pathsOf(repos))
@@ -84,6 +127,21 @@ func main() {
 		note = "gh not installed, PR columns hidden"
 	}
 	printTable(os.Stdout, repos, o.cmd == "update", note)
+}
+
+// repoPaths filters discovered paths by directory name only.
+func repoPaths(paths []string, filter string) []string {
+	if filter == "" {
+		return paths
+	}
+	f := strings.ToLower(filter)
+	var out []string
+	for _, p := range paths {
+		if strings.Contains(strings.ToLower(filepath.Base(p)), f) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // buildVersion is set with -ldflags "-X main.buildVersion=v1.2.3" by the
@@ -150,6 +208,10 @@ func parseArgs(args []string) (opts, error) {
 		switch {
 		case a == "--no-pr", a == "-no-pr":
 			o.noPR = true
+		case a == "--delete", a == "-delete":
+			o.delete = true
+		case a == "--force", a == "-force":
+			o.force = true
 		case a == "-h", a == "--help", a == "help":
 			return opts{cmd: "help"}, nil
 		case a == "--version", a == "-version", a == "version":
@@ -172,7 +234,7 @@ func parseArgs(args []string) (opts, error) {
 		}
 	}
 
-	if len(pos) > 0 && (pos[0] == "status" || pos[0] == "update") {
+	if len(pos) > 0 && slices.Contains(commands, pos[0]) {
 		o.cmd, pos = pos[0], pos[1:]
 	}
 	if len(pos) > 0 {
@@ -496,6 +558,117 @@ func printUpdates(w io.Writer, results []Result) {
 		rows = append(rows, []cell{glyph, txt(res.Repo), rawCell(tail)})
 	}
 	renderGrid(w, rows, 2)
+}
+
+func printPrune(w io.Writer, branches []Branch, doDelete, force bool) {
+	sort.Slice(branches, func(i, j int) bool {
+		if branches[i].Repo != branches[j].Repo {
+			return branches[i].Repo < branches[j].Repo
+		}
+		return branches[i].Name < branches[j].Name
+	})
+
+	if len(branches) == 0 {
+		fmt.Fprintln(w, hue(dim, "No finished branches. Nothing to prune.").String())
+		return
+	}
+
+	var rows [][]cell
+	deleted, wouldDelete, blocked, skipped, failed := 0, 0, 0, 0, 0
+
+	for _, b := range branches {
+		if b.Err != nil {
+			rows = append(rows, []cell{txt(b.Repo), hue(red, "-"),
+				rawCell(hue(red, "error: "+firstLine(b.Err.Error())).String())})
+			failed++
+			continue
+		}
+
+		var reason, action cell
+		switch b.verdict() {
+		case pruneMerged:
+			reason = hue(dim, "merged into "+b.Default)
+		case prunePR:
+			reason = hue(dim, fmt.Sprintf("PR #%d merged", b.PRNumber))
+		case pruneCurrent:
+			reason = hue(dim, "checked out here")
+		default:
+			reason = hue(yellow, "upstream gone, merge unconfirmed")
+		}
+
+		switch {
+		case b.verdict() == pruneCurrent:
+			action = hue(dim, "skipped")
+			skipped++
+		case !b.deletable(force):
+			action = hue(yellow, "needs --force")
+			blocked++
+		case !doDelete:
+			action = hue(cyan, "would delete")
+			wouldDelete++
+		default:
+			if err := deleteBranch(b); err != nil {
+				action = hue(red, "failed: "+firstLine(err.Error()))
+				failed++
+			} else {
+				action = hue(green, "deleted")
+				deleted++
+			}
+		}
+
+		rows = append(rows, []cell{txt(b.Repo), hue(cyan, b.Name), reason, action})
+	}
+	renderGrid(w, rows, 2)
+
+	var parts []string
+	if deleted > 0 {
+		parts = append(parts, fmt.Sprintf("%d deleted", deleted))
+	}
+	if wouldDelete > 0 {
+		parts = append(parts, fmt.Sprintf("%d would delete", wouldDelete))
+	}
+	if blocked > 0 {
+		verb := "need"
+		if blocked == 1 {
+			verb = "needs"
+		}
+		parts = append(parts, fmt.Sprintf("%d %s --force", blocked, verb))
+	}
+	if skipped > 0 {
+		parts = append(parts, fmt.Sprintf("%d checked out", skipped))
+	}
+	if failed > 0 {
+		parts = append(parts, fmt.Sprintf("%d failed", failed))
+	}
+	if !doDelete && wouldDelete > 0 {
+		parts = append(parts, "nothing changed (kite prune --delete)")
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, hue(dim, strings.Join(parts, " · ")).String())
+}
+
+func printStashes(w io.Writer, stashes []Stash) {
+	if len(stashes) == 0 {
+		fmt.Fprintln(w, hue(dim, "No stashes anywhere.").String())
+		return
+	}
+	sort.Slice(stashes, func(i, j int) bool {
+		if stashes[i].Repo != stashes[j].Repo {
+			return stashes[i].Repo < stashes[j].Repo
+		}
+		return stashes[i].Ref < stashes[j].Ref
+	})
+
+	rows := [][]cell{{hue(dim, "REPO"), hue(dim, "STASH"), hue(dim, "AGE"), hue(dim, "SUBJECT")}}
+	for _, s := range stashes {
+		rows = append(rows, []cell{
+			txt(s.Repo), hue(cyan, s.Ref), hue(dim, s.Age), txt(s.Subject),
+		})
+	}
+	renderGrid(w, rows, 2)
+
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, hue(dim, plural(len(stashes), "stash")+" · git -C <repo> stash show -p <ref>").String())
 }
 
 // --- small helpers ---

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -494,4 +495,197 @@ func TestVersionPrefersBuildStamp(t *testing.T) {
 	if got := version(); got != "v9.9.9" {
 		t.Errorf("version() = %q, want the ldflags stamp v9.9.9", got)
 	}
+}
+
+// stalefixture builds a clone holding one branch of each interesting shape and
+// returns them keyed by name. The gone-branch reproduces what a squash merge
+// leaves behind: a pushed branch whose remote counterpart was then deleted,
+// with no ancestry linking it to main.
+func staleFixture(t *testing.T) (clone string, got map[string]Branch) {
+	t.Helper()
+	_, clone = workspace(t)
+
+	// Merged by ancestry: the branch's commit lands on main, main is pushed.
+	mustGit(t, clone, "switch", "-qc", "merged-branch")
+	writeFile(t, clone, "merged.txt", "merged")
+	mustGit(t, clone, "add", ".")
+	mustGit(t, clone, "commit", "-qm", "merged work")
+	mustGit(t, clone, "switch", "-q", "main")
+	mustGit(t, clone, "merge", "-q", "--ff-only", "merged-branch")
+	mustGit(t, clone, "push", "-q", "origin", "main")
+
+	// Upstream gone, no ancestry: the squash-merge shape.
+	mustGit(t, clone, "switch", "-qc", "gone-branch")
+	writeFile(t, clone, "gone.txt", "gone")
+	mustGit(t, clone, "add", ".")
+	mustGit(t, clone, "commit", "-qm", "gone work")
+	mustGit(t, clone, "push", "-q", "-u", "origin", "gone-branch")
+	mustGit(t, clone, "push", "-q", "origin", "--delete", "gone-branch")
+
+	// Still live: pushed and the remote branch is still there.
+	mustGit(t, clone, "switch", "-q", "main")
+	mustGit(t, clone, "switch", "-qc", "active-branch")
+	writeFile(t, clone, "active.txt", "active")
+	mustGit(t, clone, "add", ".")
+	mustGit(t, clone, "commit", "-qm", "active work")
+	mustGit(t, clone, "push", "-q", "-u", "origin", "active-branch")
+
+	mustGit(t, clone, "switch", "-q", "main")
+
+	got = map[string]Branch{}
+	for _, b := range staleBranches(collect(clone)) {
+		if b.Err != nil {
+			t.Fatalf("staleBranches: %v", b.Err)
+		}
+		got[b.Name] = b
+	}
+	return clone, got
+}
+
+func TestStaleBranchesClassification(t *testing.T) {
+	_, got := staleFixture(t)
+
+	if len(got) != 2 {
+		t.Fatalf("found %d stale branches %v, want merged-branch and gone-branch only", len(got), keysOf(got))
+	}
+	if _, ok := got["active-branch"]; ok {
+		t.Error("a branch with a live upstream and no ancestry must not be listed")
+	}
+	if _, ok := got["main"]; ok {
+		t.Error("the default branch must never be listed")
+	}
+
+	m := got["merged-branch"]
+	if !m.Merged || m.Gone || m.Current {
+		t.Errorf("merged-branch: Merged=%v Gone=%v Current=%v, want true/false/false", m.Merged, m.Gone, m.Current)
+	}
+	if m.verdict() != pruneMerged || !m.deletable(false) {
+		t.Errorf("merged-branch: verdict=%q deletable=%v, want %q/true", m.verdict(), m.deletable(false), pruneMerged)
+	}
+
+	// This is the case a plain `git branch --merged` cannot see at all.
+	g := got["gone-branch"]
+	if g.Merged {
+		t.Error("gone-branch: a squash-merged branch has no ancestry, Merged must be false")
+	}
+	if !g.Gone {
+		t.Error("gone-branch: Gone must be true once the deleted upstream is pruned")
+	}
+	if g.verdict() != pruneUnsure {
+		t.Errorf("gone-branch: verdict=%q, want %q with no merged PR to confirm it", g.verdict(), pruneUnsure)
+	}
+	if g.deletable(false) {
+		t.Error("gone-branch: an unconfirmed merge must not be deletable without force")
+	}
+	if !g.deletable(true) {
+		t.Error("gone-branch: force must allow it")
+	}
+}
+
+func TestDeleteBranch(t *testing.T) {
+	clone, got := staleFixture(t)
+
+	if err := deleteBranch(got["merged-branch"]); err != nil {
+		t.Fatalf("deleteBranch(merged-branch): %v", err)
+	}
+	if out := mustGit(t, clone, "branch", "--list", "merged-branch"); out != "" {
+		t.Errorf("merged-branch survived deletion: %q", out)
+	}
+	// Everything else must be untouched.
+	for _, b := range []string{"gone-branch", "active-branch", "main"} {
+		if out := mustGit(t, clone, "branch", "--list", b); out == "" {
+			t.Errorf("%s was deleted but should not have been", b)
+		}
+	}
+
+	// A squash-merged branch has no ancestry, so -d would refuse it and
+	// deleteBranch must reach for -D.
+	if err := deleteBranch(got["gone-branch"]); err != nil {
+		t.Fatalf("deleteBranch(gone-branch): %v", err)
+	}
+	if out := mustGit(t, clone, "branch", "--list", "gone-branch"); out != "" {
+		t.Errorf("gone-branch survived deletion: %q", out)
+	}
+}
+
+func TestCheckedOutBranchIsNeverDeletable(t *testing.T) {
+	_, clone := workspace(t)
+	mustGit(t, clone, "switch", "-qc", "gone-branch")
+	writeFile(t, clone, "gone.txt", "gone")
+	mustGit(t, clone, "add", ".")
+	mustGit(t, clone, "commit", "-qm", "gone work")
+	mustGit(t, clone, "push", "-q", "-u", "origin", "gone-branch")
+	mustGit(t, clone, "push", "-q", "origin", "--delete", "gone-branch")
+	// Deliberately stay on gone-branch.
+
+	var b Branch
+	for _, got := range staleBranches(collect(clone)) {
+		if got.Name == "gone-branch" {
+			b = got
+		}
+	}
+	if !b.Current {
+		t.Fatalf("Current=false for the checked-out branch (Gone=%v)", b.Gone)
+	}
+	if b.verdict() != pruneCurrent {
+		t.Errorf("verdict=%q, want %q", b.verdict(), pruneCurrent)
+	}
+	if b.deletable(true) {
+		t.Error("even --force must not delete the checked-out branch, kite never switches branches")
+	}
+}
+
+func TestStashList(t *testing.T) {
+	_, clone := workspace(t)
+	if got := stashList(collect(clone)); len(got) != 0 {
+		t.Fatalf("a clean repo reported %d stashes", len(got))
+	}
+
+	writeFile(t, clone, "one.txt", "modified")
+	mustGit(t, clone, "stash", "push", "-m", "keep this for later")
+
+	got := stashList(collect(clone))
+	if len(got) != 1 {
+		t.Fatalf("got %d stashes, want 1", len(got))
+	}
+	if got[0].Ref != "stash@{0}" {
+		t.Errorf("Ref = %q, want stash@{0}", got[0].Ref)
+	}
+	if !strings.Contains(got[0].Subject, "keep this for later") {
+		t.Errorf("Subject = %q, want it to carry the message", got[0].Subject)
+	}
+	if got[0].Age == "" {
+		t.Error("Age is empty")
+	}
+	if got[0].Repo != "work" {
+		t.Errorf("Repo = %q, want work", got[0].Repo)
+	}
+}
+
+func TestRepoPaths(t *testing.T) {
+	paths := []string{"/w/api-gateway", "/w/Billing", "/w/web"}
+	tests := []struct {
+		filter string
+		want   int
+	}{
+		{"", 3},
+		{"api", 1},
+		{"bill", 1}, // case-insensitive against the directory name
+		{"w", 2},    // api-gateway and web, but NOT the /w/ parent directory
+		{"nope", 0},
+	}
+	for _, tc := range tests {
+		if got := len(repoPaths(paths, tc.filter)); got != tc.want {
+			t.Errorf("repoPaths(%q) = %d, want %d", tc.filter, got, tc.want)
+		}
+	}
+}
+
+func keysOf(m map[string]Branch) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
