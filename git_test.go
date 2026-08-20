@@ -260,19 +260,19 @@ func TestRollup(t *testing.T) {
 
 func TestFilterRepos(t *testing.T) {
 	repos := []Repo{
-		{Name: "cloudscanner", Branch: "main"},
-		{Name: "customer-asset-collector", Branch: "UP-5731-coverage"},
-		{Name: "monolith", Branch: "main"},
+		{Name: "prometheus", Branch: "main"},
+		{Name: "grafana", Branch: "PROJ-118-retry-backoff"},
+		{Name: "terraform", Branch: "main"},
 	}
 	tests := []struct {
 		filter string
 		want   int
 	}{
 		{"", 3},
-		{"up-5731", 1}, // matches a branch, case-insensitively
-		{"UP-5731", 1}, // matches a branch, as typed
-		{"cloud", 1},   // matches a repo name
-		{"main", 2},    // matches two branches
+		{"proj-118", 1}, // matches a branch, case-insensitively
+		{"PROJ-118", 1}, // matches a branch, as typed
+		{"graf", 1},     // matches a repo name
+		{"main", 2},     // matches two branches
 		{"nonsense", 0},
 	}
 	for _, tc := range tests {
@@ -287,8 +287,8 @@ func TestFilterRepos(t *testing.T) {
 func TestRenderGridAlignmentIsColorIndependent(t *testing.T) {
 	rows := [][]cell{
 		{hue(dim, "REPO"), hue(dim, "BRANCH"), hue(dim, "↑↓"), hue(dim, "CI")},
-		{txt("cloudscanner"), txt("main"), hue(dim, "-"), txt("")},
-		{txt("customer-asset-collector"), hue(cyan, "UP-5731-coverage"), hue(yellow, "↑2↓3"), hue(green, "✓")},
+		{txt("prometheus"), txt("main"), hue(dim, "-"), txt("")},
+		{txt("grafana"), hue(cyan, "PROJ-118-retry-backoff"), hue(yellow, "↑2↓3"), hue(green, "✓")},
 		{txt("kite"), hue(yellow, "detached@39902fe"), hue(dim, "·"), hue(red, "✗")},
 	}
 
@@ -352,7 +352,7 @@ func TestParseArgs(t *testing.T) {
 		wantErr bool
 	}{
 		{args: nil, want: opts{cmd: "status"}},
-		{args: []string{"UP-5731"}, want: opts{cmd: "status", filter: "UP-5731"}},
+		{args: []string{"PROJ-118"}, want: opts{cmd: "status", filter: "PROJ-118"}},
 		{args: []string{"update"}, want: opts{cmd: "update"}},
 		{args: []string{"update", "kite"}, want: opts{cmd: "update", filter: "kite"}},
 		{args: []string{"--root", "/tmp/x"}, want: opts{cmd: "status", root: "/tmp/x"}},
