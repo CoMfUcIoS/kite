@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/CoMfUcIoS/kite/compare/v0.3.0...v0.4.0) (2026-09-10)
+
+
+### Features
+
+* surface every open PR, its review state and conflict risk ([8f18714](https://github.com/CoMfUcIoS/kite/commit/8f18714edd5800b88552971dbbc61dc297a03c6e))
+
 ## [0.3.0](https://github.com/CoMfUcIoS/kite/compare/v0.2.0...v0.3.0) (2026-08-20)
 
 
