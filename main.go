@@ -38,8 +38,9 @@ flags:
   --version                print the version
   -h, --help               this text
 
-the PR and CI columns appear only when there is something to put in them, so a
-machine without gh installed or authenticated simply does not show them.
+the PR, RV and CI columns appear only when there is something to put in them, so a
+machine without gh installed or authenticated simply does not show them. --no-pr
+skips every GitHub lookup, including the review queue.
 `
 
 type opts struct {
@@ -101,9 +102,13 @@ func main() {
 		return
 	}
 
+	// Only status and update render the conflict marker; prune and stash
+	// would pay for a merge-tree per repo and never show it.
+	withConflicts := o.cmd == "status" || o.cmd == "update"
+
 	// Collect locally first so the filter can match on branch name before we
 	// spend any network calls on repos we are about to drop.
-	repos := filterRepos(collectAll(paths), o.filter)
+	repos := filterRepos(collectAll(paths, withConflicts), o.filter)
 	if len(repos) == 0 {
 		fmt.Fprintf(os.Stderr, "kite: no repo or branch matching %q in %s\n", o.filter, root)
 		os.Exit(1)
@@ -119,14 +124,22 @@ func main() {
 	case "update":
 		printUpdates(os.Stdout, updateAll(repos))
 		fmt.Println()
-		repos = collectAll(pathsOf(repos))
+		repos = collectAll(pathsOf(repos), withConflicts)
 	}
 
 	note := ""
-	if !o.noPR && !attachPRs(repos) {
-		note = "gh not installed, PR columns hidden"
+	var queue []ReviewReq
+	if !o.noPR {
+		var ghFound bool
+		ghFound, queue = attachAll(repos)
+		if failed := countPRErrs(repos); !ghFound {
+			note = "gh not installed, PR columns hidden"
+		} else if failed > 0 {
+			note = prLookupNote(failed)
+		}
 	}
 	printTable(os.Stdout, repos, o.cmd == "update", note)
+	printReviewQueue(os.Stdout, queue)
 }
 
 // repoPaths filters discovered paths by directory name only.
@@ -262,11 +275,30 @@ func filterRepos(repos []Repo, filter string) []Repo {
 	f := strings.ToLower(filter)
 	var out []Repo
 	for _, r := range repos {
-		if strings.Contains(strings.ToLower(r.Name), f) || strings.Contains(strings.ToLower(r.Branch), f) {
+		if matchesFilter(r, f) {
 			out = append(out, r)
 		}
 	}
 	return out
+}
+
+// matchesFilter tests the repo name, the checked-out branch, and any other
+// local branch. Remote refs are deliberately excluded: every repo carries an
+// origin/main, so matching those would make `kite main` select everything.
+//
+// The cost is that filtering by the name of a PR branch you hold no local copy
+// of will not find it. An unfiltered run still shows it.
+func matchesFilter(r Repo, f string) bool {
+	if strings.Contains(strings.ToLower(r.Name), f) ||
+		strings.Contains(strings.ToLower(r.Branch), f) {
+		return true
+	}
+	for _, b := range r.LocalBranches {
+		if strings.Contains(strings.ToLower(b), f) {
+			return true
+		}
+	}
+	return false
 }
 
 func pathsOf(repos []Repo) []string {
@@ -275,6 +307,24 @@ func pathsOf(repos []Repo) []string {
 		out[i] = r.Path
 	}
 	return out
+}
+
+// prLookupNote reports how many per-repo PR lookups failed, for the footer.
+func prLookupNote(failed int) string {
+	return plural(failed, "PR lookup") + " failed"
+}
+
+// countPRErrs counts repos whose gh lookup failed, as opposed to genuinely
+// having no open PRs: an expired token or a rate limit looks identical to
+// "nothing to show" unless this is surfaced separately.
+func countPRErrs(repos []Repo) int {
+	n := 0
+	for _, r := range repos {
+		if r.PRErr {
+			n++
+		}
+	}
+	return n
 }
 
 // --- grid ---
@@ -368,25 +418,50 @@ func renderGrid(w io.Writer, rows [][]cell, gap int) {
 	}
 }
 
+// eachPR visits the repo's own PR and every sub-row PR. Skips a repo whose
+// local collection failed, matching the row loop in printTable so footer
+// counts and column visibility never disagree with what actually renders.
+func eachPR(repos []Repo, fn func(*PR)) {
+	for i := range repos {
+		if repos[i].Err != nil {
+			continue
+		}
+		if repos[i].PR != nil {
+			fn(repos[i].PR)
+		}
+		for j := range repos[i].Others {
+			fn(&repos[i].Others[j].PR)
+		}
+	}
+}
+
 func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
 	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
 
 	// A column nobody can fill is a column nobody should read. This covers a
 	// missing gh, an unauthenticated gh, --no-pr, and simply having no open PRs.
-	showPR, showCI := false, false
-	for _, r := range repos {
-		if r.PR == nil {
-			continue
-		}
+	showPR, showRV, showCI := false, false, false
+	openPRs, redPRs := 0, 0
+	eachPR(repos, func(p *PR) {
 		showPR = true
-		if r.PR.CI != "" {
+		openPRs++
+		if p.Review != "" {
+			showRV = true
+		}
+		if p.CI != "" {
 			showCI = true
 		}
-	}
+		if p.CI == ciFail {
+			redPRs++
+		}
+	})
 
 	header := []string{"REPO", "BRANCH", "DIRTY", "↑↓", "vs MAIN", "STASH", "LAST"}
 	if showPR {
 		header = append(header, "PR")
+	}
+	if showRV {
+		header = append(header, "RV")
 	}
 	if showCI {
 		header = append(header, "CI")
@@ -394,6 +469,20 @@ func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
 	rows := [][]cell{{}}
 	for _, h := range header {
 		rows[0] = append(rows[0], hue(dim, h))
+	}
+
+	addRow := func(name, branch, dirtyC, up, main, stash cell, last time.Time, p *PR) {
+		row := []cell{name, branch, dirtyC, up, main, stash, hue(dim, age(last))}
+		if showPR {
+			row = append(row, txt(prCell(p)))
+		}
+		if showRV {
+			row = append(row, reviewCell(p))
+		}
+		if showCI {
+			row = append(row, ciCell(p))
+		}
+		rows = append(rows, row)
 	}
 
 	dirty, stashes := 0, 0
@@ -412,17 +501,21 @@ func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
 		if !r.FetchedAt.IsZero() && (oldestFetch.IsZero() || r.FetchedAt.Before(oldestFetch)) {
 			oldestFetch = r.FetchedAt
 		}
-		row := []cell{
-			txt(r.Name), r.branchCell(), r.dirtyCell(), r.upstreamCell(), r.behindMainCell(),
-			r.stashCell(), hue(dim, age(r.LastCommit)),
+		addRow(txt(r.Name), r.branchCell(), r.dirtyCell(),
+			upstreamCell(r.Ahead, r.Behind, r.NoUpstream),
+			behindMainCell(r.BehindMain, r.Conflicts),
+			r.stashCell(), r.LastCommit, r.PR)
+
+		for j := range r.Others {
+			o := &r.Others[j]
+			// DIRTY and STASH show a dash rather than a real value on a
+			// sub-row: both belong to the working tree and the repo, not to a
+			// branch nobody checked out.
+			addRow(txt(""), hue(cyan, "└ "+o.Branch), hue(dim, "-"),
+				upstreamCell(o.Ahead, o.Behind, o.NoUpstream),
+				subRowMainCell(o),
+				hue(dim, "-"), o.LastCommit, &o.PR)
 		}
-		if showPR {
-			row = append(row, txt(r.prCell()))
-		}
-		if showCI {
-			row = append(row, r.ciCell())
-		}
-		rows = append(rows, row)
 	}
 	renderGrid(w, rows, 2)
 
@@ -438,6 +531,12 @@ func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
 	}
 	if stashes > 0 {
 		parts = append(parts, plural(stashes, "stash"))
+	}
+	if openPRs > 0 {
+		parts = append(parts, plural(openPRs, "open PR"))
+	}
+	if redPRs > 0 {
+		parts = append(parts, fmt.Sprintf("%d red", redPRs))
 	}
 	if len(broken) > 0 {
 		parts = append(parts, fmt.Sprintf("%d unreadable", len(broken)))
@@ -459,6 +558,27 @@ func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
 	fmt.Fprintln(w, hue(dim, strings.Join(parts, " · ")))
 }
 
+// printReviewQueue lists the PRs waiting on you. Nothing waiting means no
+// block at all, matching how the PR columns disappear rather than sit empty.
+func printReviewQueue(w io.Writer, qs []ReviewReq) {
+	if len(qs) == 0 {
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, hue(dim, "waiting on you"))
+	rows := make([][]cell, 0, len(qs))
+	for _, q := range qs {
+		rows = append(rows, []cell{
+			txt(""),
+			txt(q.Repo),
+			hue(dim, fmt.Sprintf("#%d", q.Number)),
+			hue(dim, age(q.Created)),
+			txt(firstLine(q.Title)),
+		})
+	}
+	renderGrid(w, rows, 2)
+}
+
 func (r Repo) branchCell() cell {
 	switch {
 	case r.Detached:
@@ -476,32 +596,6 @@ func (r Repo) dirtyCell() cell {
 	return hue(yellow, fmt.Sprint(r.Dirty))
 }
 
-func (r Repo) upstreamCell() cell {
-	if r.NoUpstream {
-		return hue(dim, "·")
-	}
-	switch {
-	case r.Ahead > 0 && r.Behind > 0:
-		return hue(yellow, fmt.Sprintf("↑%d↓%d", r.Ahead, r.Behind))
-	case r.Ahead > 0:
-		return hue(cyan, fmt.Sprintf("↑%d", r.Ahead))
-	case r.Behind > 0:
-		return hue(yellow, fmt.Sprintf("↓%d", r.Behind))
-	}
-	return hue(dim, "-")
-}
-
-func (r Repo) behindMainCell() cell {
-	if r.BehindMain == 0 {
-		return hue(dim, "-")
-	}
-	s := fmt.Sprintf("-%d", r.BehindMain)
-	if r.BehindMain >= 20 {
-		return hue(yellow, s)
-	}
-	return txt(s)
-}
-
 func (r Repo) stashCell() cell {
 	if r.Stashes == 0 {
 		return hue(dim, "-")
@@ -509,26 +603,107 @@ func (r Repo) stashCell() cell {
 	return hue(yellow, fmt.Sprint(r.Stashes))
 }
 
-func (r Repo) prCell() string {
-	if r.PR == nil {
-		return ""
+func upstreamCell(ahead, behind int, noUpstream bool) cell {
+	if noUpstream {
+		return hue(dim, "·")
 	}
-	return fmt.Sprintf("#%d", r.PR.Number)
+	switch {
+	case ahead > 0 && behind > 0:
+		return hue(yellow, fmt.Sprintf("↑%d↓%d", ahead, behind))
+	case ahead > 0:
+		return hue(cyan, fmt.Sprintf("↑%d", ahead))
+	case behind > 0:
+		return hue(yellow, fmt.Sprintf("↓%d", behind))
+	}
+	return hue(dim, "-")
 }
 
-func (r Repo) ciCell() cell {
-	if r.PR == nil {
+func behindMainCell(n int, conflicts bool) cell {
+	if n == 0 {
+		return hue(dim, "-")
+	}
+	s := fmt.Sprintf("-%d", n)
+	if conflicts {
+		// "!" and not "⚠": width() counts runes, and U+26A0 renders
+		// double-width wherever it gets emoji presentation, which would shift
+		// every column to its right. This also matches the "!" that update
+		// already prints for a diverged main.
+		return hue(red, s+"!")
+	}
+	if n >= 20 {
+		return hue(yellow, s)
+	}
+	return txt(s)
+}
+
+// subRowMainCell renders vs MAIN for a sub-row. Blank rather than "-" when
+// the branch never resolved to a ref, or the default branch itself is
+// unknown: "-" claims "level with main", which is not the same thing as
+// "unknown".
+func subRowMainCell(o *PRRow) cell {
+	if !o.Resolved {
 		return txt("")
 	}
-	switch r.PR.CI {
-	case ciPass:
+	return behindMainCell(o.BehindMain, o.Conflicts)
+}
+
+func prCell(p *PR) string {
+	if p == nil {
+		return ""
+	}
+	return fmt.Sprintf("#%d", p.Number)
+}
+
+func reviewCell(p *PR) cell {
+	if p == nil {
+		return txt("")
+	}
+	switch p.Review {
+	case revApproved:
 		return hue(green, "✓")
-	case ciFail:
+	case revChanges:
 		return hue(red, "✗")
-	case ciPending:
-		return hue(yellow, "○")
+	case revRequired:
+		return hue(dim, "·")
+	case revDraft:
+		return hue(dim, "✎")
 	}
 	return txt("")
+}
+
+func ciCell(p *PR) cell {
+	if p == nil {
+		return txt("")
+	}
+	switch p.CI {
+	case ciPass:
+		return hue(green, "✓")
+	case ciPending:
+		return hue(yellow, "○")
+	case ciFail:
+		if p.Failing == "" {
+			return hue(red, "✗")
+		}
+		s := truncate(p.Failing, 20)
+		if p.Extra > 0 {
+			s = fmt.Sprintf("%s +%d", s, p.Extra)
+		}
+		// raw mixes a colored glyph with dim text, which one cell cannot
+		// express. Valid only because CI is the row's final cell, and final
+		// cells are never padded.
+		return rawCell(hue(red, "✗").String() + " " + hue(dim, s).String())
+	}
+	return txt("")
+}
+
+// truncate caps a check name. CI is the final column and never padded, so this
+// is the only thing keeping a long job name from running off the terminal.
+func truncate(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
 }
 
 func printUpdates(w io.Writer, results []Result) {
