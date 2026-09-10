@@ -5,22 +5,33 @@ one's default branch up to date without disturbing what you're doing.
 
 ```
 $ kite
-REPO        BRANCH              DIRTY  ↑↓  vs MAIN  STASH  LAST  PR     CI
-caddy       main                -      -   -        -      3h
-etcd        main                6      -   -        -      6d
-grafana     feat/retry-backoff  -      ↑2  -4       -      19h   #4211  ✓
-prometheus  main                -      -   -        1      2d
-terraform   fix/1234-nil-deref  2      ↑1  -31      -      23h   #887   ✗
-traefik     release/v3          -      ·   -        -      3w
-vault       chore/bump-deps     -      -   -8       2      4d    #152   ○
+REPO        BRANCH                  DIRTY  ↑↓  vs MAIN  STASH  LAST  PR     RV  CI
+caddy       main                    -      -   -        -      3h
+etcd        feat/lease-ttl-tuning   6      ↑3  -        1      4d    #204       ○
+grafana     feat/retry-backoff      -      ↑2  -4       -      19h   #4211  ✓   ✓
+prometheus  main                    -      -   -        -      6d
+            └ feat/remote-write-v2  -      -   -14!     -      3h    #591   ✗   ✗ lint +2
+            └ feat/queue-metrics    -      ·            -      1d    #602   ·   ○
+terraform   fix/module-nil-deref    -      ↑1  -31      -      23h   #887   ·   ○
+traefik     release/v3              -      ·   -        -      3w
+vault       chore/bump-deps         -      -   -8       -      4d    #152   ✎
 
-7 repos · 2 dirty · 3 stashes · oldest fetch 1d ago (kite update)
+7 repos · 1 dirty · 1 stash · 6 open PRs · 1 red · oldest fetch 1d ago (kite update)
+
+waiting on you
+  caddy    #150  4d  feat: add h3 fallback probe
+  grafana  #98   2d  chore: rotate registry secrets cache
 ```
 
-Reading that: `etcd` has six uncommitted files. `grafana` is two commits ahead of
-its own remote and four behind main, with a green PR. `terraform` is 31 behind
-main and its PR is red. `traefik` has no upstream at all. `vault` has two
-forgotten stashes and a PR still running.
+Reading that: `etcd` has six uncommitted files and a PR still waiting on CI.
+`grafana`'s PR is approved and green. `prometheus` itself sits on `main`, but it
+has two PRs open on branches you're not standing on: `feat/remote-write-v2`, 14
+commits behind main with changes requested and lint failing plus two more
+checks, and `feat/queue-metrics`, whose branch kite can't find at all, so `vs
+MAIN` is blank instead of a number. `terraform` is 31 behind main and waiting
+on a reviewer. `traefik` has no upstream at all. `vault`'s PR is still a draft.
+And two of those PRs, on `caddy` and `grafana`, are waiting on a review from
+you.
 
 ## Usage
 
@@ -153,18 +164,68 @@ kite: 2 repos match "agent", be more specific:
 | Column | Meaning |
 | --- | --- |
 | `DIRTY` | modified plus untracked files |
-| `↑↓` | commits ahead of and behind the branch's own upstream, `·` when it has none |
-| `vs MAIN` | commits this branch is behind `origin/main` as of the last fetch |
+| `↑↓` | commits ahead of and behind the branch's own upstream; `·` when there's nothing to compare against — no upstream configured, the upstream is `[gone]`, or (on a sub-row) the branch never resolved to anything |
+| `vs MAIN` | commits this branch is behind `origin/main` as of the last fetch; a trailing `!` means merging `main` in would conflict. Blank, not `-`, when kite can't resolve the branch to a ref or doesn't know the default branch — `-` means level with main, blank means unknown |
 | `STASH` | stashes sitting in the repo |
 | `LAST` | age of the newest commit |
 | `PR` / `CI` | open PR and its rolled-up check status, for branches that aren't the default |
+| `RV` | review state: `✓` approved, `✗` changes requested, `·` waiting on reviewers, `✎` draft |
 
-`PR` and `CI` appear only when there is something to put in them. Without `gh`
-installed or authenticated, or with `--no-pr`, or with nothing checked out but
-default branches, the two columns are left out entirely rather than shown empty.
+`PR`, `RV` and `CI` appear only when there is something to put in them. Without
+`gh` installed or authenticated, or with `--no-pr`, or with nothing checked out
+but default branches, the columns are left out entirely rather than shown empty.
+`RV` is also blank on a row with a PR but no reviewers assigned yet.
 
 `status` never hits the network for git, so `↑↓` and `vs MAIN` are only as fresh
 as your last fetch. The footer says how stale that is. `update` refreshes it.
+
+## Branches you aren't standing on
+
+A repo can sit on `main` and still have your PR open on a branch you switched
+away from, or never cloned at all. Those appear as indented rows under their
+repo:
+
+```
+REPO        BRANCH                  DIRTY  ↑↓  vs MAIN  STASH  LAST  PR     RV  CI
+prometheus  main                    -      -   -        -      6d
+            └ feat/remote-write-v2  -      -   -14!     -      3h    #591   ✗   ✗ lint +2
+            └ feat/queue-metrics    -      ·            -      1d    #602   ·   ○
+```
+
+`DIRTY` and `STASH` show a dash on those rows, not a count. Both belong to the
+working tree and the repo, not to a branch nobody has checked out.
+
+`feat/queue-metrics` is the "never cloned at all" case: kite can't find that
+branch locally or on `origin`, so it has nothing to compare against main, or
+even against its own upstream. `vs MAIN` renders blank rather than `-`, and
+`↑↓` renders `·` rather than `-`, because both would otherwise misread as
+"level" instead of "unknown".
+
+The `!` on `-14!` means merging `main` into that branch would conflict. kite
+works this out with `git merge-tree`, which writes only to the object store: it
+never checks out, merges, stashes or moves anything.
+
+**It is exact for `git merge main` and approximate for `git rebase main`.** A
+rebase replays your commits one at a time and can conflict on an intermediate
+step even when the final trees merge cleanly. Treat it as a hint that saves you
+a doomed attempt, not a guarantee.
+
+## What's waiting on you
+
+Below the table, kite lists open PRs where you're a requested reviewer, oldest
+first by when they were opened, narrowed to repos in this directory. The age
+next to each is how long ago it was created, not when it last saw activity, so
+a three-week-old PR with a five-minute-old comment still sorts and reads as
+three weeks old:
+
+```
+waiting on you
+  caddy    #150  4d  feat: add h3 fallback probe
+  grafana  #98   2d  chore: rotate registry secrets cache
+```
+
+Drafts are left out. So is anything in a repo whose directory name doesn't
+match its GitHub name. `--no-pr` skips this along with the PR columns.
 
 ## Install
 

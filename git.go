@@ -2,26 +2,27 @@ package main
 
 import (
 	"bytes"
-	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-// ponytail: 8 concurrent repos and one subprocess per datum. 15 repos comes to
-// roughly a hundred short-lived git processes, measured at 0.5s wall clock.
-// Process spawn dominates, so if that ever grates, `status --porcelain=v2
-// --branch` returns branch, ahead, behind and dirty entries in a single call.
-const maxParallel = 8
-
-const prTimeout = 3 * time.Second
+// ponytail: one subprocess per datum. 23 repos comes to roughly two hundred
+// short-lived git processes, measured at 0.65s wall clock. Process spawn
+// dominates, so if that ever grates, `status --porcelain=v2 --branch` returns
+// branch, ahead, behind and dirty entries in a single call.
+//
+// 32 rather than 8 because the gh lookups are network-bound and now run for
+// every repo: at 8 the 23 calls took three waves instead of one.
+const maxParallel = 32
 
 // CI verdicts.
 const (
@@ -39,11 +40,6 @@ const (
 	statusBlocked  = "blocked"
 	statusError    = "error"
 )
-
-type PR struct {
-	Number int
-	CI     string
-}
 
 type Repo struct {
 	Name string
@@ -63,8 +59,22 @@ type Repo struct {
 	LastCommit time.Time
 	FetchedAt  time.Time
 
-	PR  *PR
-	Err error
+	PR     *PR
+	Others []PRRow // open PRs on branches this repo does not have checked out
+	PRErr  bool    // the gh lookup for this repo failed; not the same as "no open PRs"
+	Err    error
+
+	// Refs holds every local and origin branch, so sub-rows and the filter
+	// need no further subprocesses.
+	Refs map[string]refMeta
+	// LocalBranches lists local branches except the default, for the filter.
+	// origin/* is deliberately absent: every repo has an origin/main, so
+	// including remotes would make `kite main` match every repo.
+	LocalBranches []string
+
+	// Conflicts means merging origin/<default> into the current branch would
+	// conflict. Local data, so it survives --no-pr.
+	Conflicts bool
 }
 
 type Result struct {
@@ -110,9 +120,12 @@ func discover(root string) []string {
 	return out
 }
 
-func collectAll(paths []string) []Repo {
+// withConflicts controls whether collect spends a merge-tree subprocess per
+// repo on the conflict marker. Only status and update render it; prune and
+// stash never do, so it would be pure waste there.
+func collectAll(paths []string, withConflicts bool) []Repo {
 	out := make([]Repo, len(paths))
-	fan(len(paths), func(i int) { out[i] = collect(paths[i]) })
+	fan(len(paths), func(i int) { out[i] = collect(paths[i], withConflicts) })
 	return out
 }
 
@@ -132,7 +145,7 @@ func fan(n int, fn func(int)) {
 	wg.Wait()
 }
 
-func collect(path string) Repo {
+func collect(path string, withConflicts bool) Repo {
 	r := Repo{Name: filepath.Base(path), Path: path}
 
 	branch, err := git(path, "branch", "--show-current")
@@ -170,6 +183,9 @@ func collect(path string) Repo {
 		if s, err := git(path, "rev-list", "--count", "HEAD..origin/"+r.Default); err == nil {
 			r.BehindMain, _ = strconv.Atoi(s)
 		}
+		if withConflicts && r.BehindMain > 0 {
+			r.Conflicts = conflicts(path, "HEAD", r.Default)
+		}
 	}
 
 	if s, err := git(path, "stash", "list"); err == nil {
@@ -185,6 +201,18 @@ func collect(path string) Repo {
 	if fi, err := os.Stat(filepath.Join(gitDir(path), "FETCH_HEAD")); err == nil {
 		r.FetchedAt = fi.ModTime()
 	}
+
+	r.Refs = refs(path)
+	for name := range r.Refs {
+		// %(refname:short) renders refs/remotes/origin/HEAD as the bare
+		// "origin", with no slash, so the origin/ prefix check below misses
+		// it and it would otherwise land in LocalBranches.
+		if name == "origin" || strings.HasPrefix(name, "origin/") || name == r.Default {
+			continue
+		}
+		r.LocalBranches = append(r.LocalBranches, name)
+	}
+	sort.Strings(r.LocalBranches)
 
 	return r
 }
@@ -294,94 +322,6 @@ func classify(err error) string {
 		return statusBlocked
 	}
 	return statusError
-}
-
-// --- GitHub ---
-
-type ghCheck struct {
-	Status     string `json:"status"`     // CheckRun
-	Conclusion string `json:"conclusion"` // CheckRun
-	State      string `json:"state"`      // StatusContext
-}
-
-type ghPR struct {
-	Number            int       `json:"number"`
-	StatusCheckRollup []ghCheck `json:"statusCheckRollup"`
-}
-
-// attachPRs looks up the open PR for every repo sitting on a non-default
-// branch, and reports whether gh was even available. Anything that goes wrong
-// leaves the columns blank; a missing gh, a stale token or a slow API must
-// never cost you the rest of the table.
-func attachPRs(repos []Repo) (ghFound bool) {
-	if !ghAvailable() {
-		return false
-	}
-	fan(len(repos), func(i int) {
-		r := &repos[i]
-		if r.Err != nil || r.Detached || r.Default == "" || r.Branch == r.Default {
-			return
-		}
-		r.PR = fetchPR(r.Path, r.Branch)
-	})
-	return true
-}
-
-func fetchPR(dir, branch string) *PR {
-	ctx, cancel := context.WithTimeout(context.Background(), prTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
-		"--head", branch, "--state", "open", "--limit", "1",
-		"--json", "number,statusCheckRollup")
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		return nil
-	}
-
-	var list []ghPR
-	if json.Unmarshal(out, &list) != nil || len(list) == 0 {
-		return nil
-	}
-	return &PR{Number: list[0].Number, CI: rollup(list[0].StatusCheckRollup)}
-}
-
-// rollup collapses every check on a PR into one verdict: any failure wins,
-// then any pending, otherwise it passed.
-func rollup(checks []ghCheck) string {
-	if len(checks) == 0 {
-		return ""
-	}
-	pending := false
-	for _, c := range checks {
-		switch verdict(c) {
-		case ciFail:
-			return ciFail
-		case ciPending:
-			pending = true
-		}
-	}
-	if pending {
-		return ciPending
-	}
-	return ciPass
-}
-
-// verdict normalises one check. A CheckRun reports status plus conclusion, a
-// StatusContext reports state, and gh returns both shapes in the same array.
-func verdict(c ghCheck) string {
-	s := strings.ToUpper(c.Conclusion)
-	if s == "" {
-		s = strings.ToUpper(c.State)
-	}
-	switch s {
-	case "FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE":
-		return ciFail
-	case "SUCCESS", "NEUTRAL", "SKIPPED":
-		return ciPass
-	}
-	return ciPending
 }
 
 // --- prune ---
@@ -567,29 +507,137 @@ func stashList(r Repo) []Stash {
 	return stashes
 }
 
-// --- shared gh helpers ---
-
-func ghAvailable() bool {
-	_, err := exec.LookPath("gh")
-	return err == nil
+// parseTrack reads git's "[ahead 1, behind 4]" upstream:track format, or the
+// "[gone]" marker left once a deleted remote branch has been pruned. An empty
+// string means either no upstream or level with it; callers distinguish those
+// two using %(upstream:short), which is empty only in the first case. gone can
+// be true alongside a non-empty %(upstream:short): git keeps the configured
+// upstream name even after the remote-tracking ref is pruned, so callers must
+// check gone too rather than trusting upstream-name emptiness alone.
+func parseTrack(s string) (ahead, behind int, gone bool) {
+	s = strings.Trim(s, "[]")
+	switch s {
+	case "":
+		return 0, 0, false
+	case "gone":
+		return 0, 0, true
+	}
+	for _, part := range strings.Split(s, ", ") {
+		var n int
+		if _, err := fmt.Sscanf(part, "ahead %d", &n); err == nil {
+			ahead = n
+			continue
+		}
+		if _, err := fmt.Sscanf(part, "behind %d", &n); err == nil {
+			behind = n
+		}
+	}
+	return ahead, behind, false
 }
 
-// mergedPR returns the number of a merged pull request for this branch, or 0.
-func mergedPR(dir, branch string) int {
-	ctx, cancel := context.WithTimeout(context.Background(), prTimeout)
-	defer cancel()
+type refMeta struct {
+	Upstream   string
+	Ahead      int
+	Behind     int
+	Gone       bool
+	LastCommit time.Time
+}
 
-	cmd := exec.CommandContext(ctx, "gh", "pr", "list",
-		"--head", branch, "--state", "merged", "--limit", "1", "--json", "number")
-	cmd.Dir = dir
-	out, err := cmd.Output()
-	if err != nil {
-		return 0
+// refs reads every local and origin branch in one subprocess. Sub-rows need
+// per-branch data, and one call per branch would cost more than the feature.
+func refs(path string) map[string]refMeta {
+	out, err := git(path, "for-each-ref",
+		"--format=%(refname:short)%00%(upstream:short)%00%(upstream:track)%00%(committerdate:unix)",
+		"refs/heads", "refs/remotes/origin")
+	if err != nil || out == "" {
+		return nil
 	}
+	m := make(map[string]refMeta)
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Split(line, "\x00")
+		if len(f) < 4 || f[0] == "" {
+			continue
+		}
+		ahead, behind, gone := parseTrack(f[2])
+		meta := refMeta{Upstream: f[1], Ahead: ahead, Behind: behind, Gone: gone}
+		if secs, err := strconv.ParseInt(f[3], 10, 64); err == nil {
+			meta.LastCommit = time.Unix(secs, 0)
+		}
+		m[f[0]] = meta
+	}
+	return m
+}
 
-	var list []ghPR
-	if json.Unmarshal(out, &list) != nil || len(list) == 0 {
-		return 0
+// refFor resolves a PR branch to a ref that exists here, preferring the local
+// copy. The origin fallback is what covers a PR whose branch you never cloned
+// or have since deleted.
+func refFor(branch string, m map[string]refMeta) string {
+	if _, ok := m[branch]; ok {
+		return branch
 	}
-	return list[0].Number
+	if _, ok := m["origin/"+branch]; ok {
+		return "origin/" + branch
+	}
+	return ""
+}
+
+// fillRows gives each sub-row the local data its columns need, then orders
+// them newest commit first.
+func fillRows(path, def string, rows []PRRow, m map[string]refMeta) {
+	for i := range rows {
+		ref := refFor(rows[i].Branch, m)
+		if ref == "" {
+			// Nothing at all is known about this branch: NoUpstream stays
+			// true so the ↑↓ cell reads "unknown" rather than "level".
+			rows[i].NoUpstream = true
+			continue
+		}
+		rows[i].Resolved = true
+		meta := m[ref]
+		rows[i].Ahead, rows[i].Behind = meta.Ahead, meta.Behind
+		// meta.Gone: the remote branch was deleted and pruned, but git keeps
+		// the upstream name configured, so upstream-name emptiness alone
+		// would miss this and render "level" instead of "unknown".
+		rows[i].NoUpstream = meta.Upstream == "" || meta.Gone
+		rows[i].LastCommit = meta.LastCommit
+		if def == "" {
+			// No default branch is known for anyone, so vs MAIN cannot be
+			// computed. Un-resolve the row rather than leave BehindMain at
+			// its zero value, which would render as "level with main".
+			rows[i].Resolved = false
+			continue
+		}
+		if s, err := git(path, "rev-list", "--count", ref+"..origin/"+def); err == nil {
+			rows[i].BehindMain, _ = strconv.Atoi(s)
+		}
+	}
+	// Stable: two PRs on the same un-checked-out branch (item 2) share a
+	// Branch and LastCommit, so an unstable sort could flip their render
+	// order between runs on identical input.
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].LastCommit.After(rows[j].LastCommit) })
+}
+
+// conflicts reports whether merging origin/<def> into ref would conflict. It
+// writes only to the object store: no checkout, no index, no working tree.
+//
+// Exit 0 is a clean merge and exit 1 is a conflict. Anything else means
+// unknown, which includes git older than 2.38 rejecting --write-tree, and
+// unknown shows no marker. That is why no version detection is needed.
+//
+// Exact for `git merge main`. A rebase replays commits one at a time and can
+// conflict on an intermediate step even when the final trees merge cleanly,
+// so for rebases this is a hint, not a guarantee.
+func conflicts(path, ref, def string) bool {
+	if ref == "" || def == "" {
+		return false
+	}
+	cmd := exec.Command("git", "merge-tree", "--write-tree", "--name-only", ref, "origin/"+def)
+	cmd.Dir = path
+	cmd.Stdout, cmd.Stderr = io.Discard, io.Discard
+	err := cmd.Run()
+	if err == nil {
+		return false
+	}
+	var ee *exec.ExitError
+	return errors.As(err, &ee) && ee.ExitCode() == 1
 }
