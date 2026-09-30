@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/CoMfUcIoS/kite/compare/v0.7.0...v0.8.0) (2026-09-30)
+
+
+### Features
+
+* show progress while kite works, and how long it took ([#16](https://github.com/CoMfUcIoS/kite/issues/16)) ([2932a2e](https://github.com/CoMfUcIoS/kite/commit/2932a2e86a22d1b85b1c5a55db40bb1e6ad7bb2c))
+
+
+### Performance Improvements
+
+* speed up status with the untracked cache and an early review search ([#14](https://github.com/CoMfUcIoS/kite/issues/14)) ([0380482](https://github.com/CoMfUcIoS/kite/commit/03804822fb71e01228bb13e2849eec27beb4888d))
+
 ## [0.7.0](https://github.com/CoMfUcIoS/kite/compare/v0.6.0...v0.7.0) (2026-09-30)
 
 
