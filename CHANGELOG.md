@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.0](https://github.com/CoMfUcIoS/kite/compare/v0.5.0...v0.6.0) (2026-09-30)
+
+
+### Features
+
+* add --json output to status, update, stash and prune ([#10](https://github.com/CoMfUcIoS/kite/issues/10)) ([1bc25fb](https://github.com/CoMfUcIoS/kite/commit/1bc25fb57ada0f28abfc4c9c01bb98f099b30018))
+* flag branches whose upstream was force-pushed ([#11](https://github.com/CoMfUcIoS/kite/issues/11)) ([2fb80a7](https://github.com/CoMfUcIoS/kite/commit/2fb80a765d5359428ee21ef2ca8f79cf1a3e0bc1))
+* let prune remove finished worktrees ([#8](https://github.com/CoMfUcIoS/kite/issues/8)) ([2c16983](https://github.com/CoMfUcIoS/kite/commit/2c16983086bcd354dfc5c0fc28b5003ece4ee61f))
+
 ## [0.5.0](https://github.com/CoMfUcIoS/kite/compare/v0.4.0...v0.5.0) (2026-09-30)
 
 
