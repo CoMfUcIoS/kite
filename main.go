@@ -74,6 +74,7 @@ func main() {
 	}
 	requireGit()
 	initColor()
+	start := time.Now()
 
 	root := rootDir(o.root)
 	paths := discover(root)
@@ -110,6 +111,7 @@ func main() {
 		search = startSearch(searchReviews)
 	}
 	paths = withWorktrees(paths)
+	prog = startProgress()
 
 	// Only status and update render the conflict marker; prune and stash
 	// would pay for a merge-tree per repo and never show it.
@@ -117,8 +119,10 @@ func main() {
 
 	// Collect locally first so the filter can match on branch name before we
 	// spend any network calls on repos we are about to drop.
+	prog.phase("reading repos", len(paths))
 	repos := filterRepos(collectAll(paths, withConflicts), o.filter)
 	if len(repos) == 0 {
+		prog.stop()
 		fmt.Fprintf(os.Stderr, "kite: no repo or branch matching %q in %s\n", o.filter, root)
 		os.Exit(1)
 	}
@@ -128,7 +132,10 @@ func main() {
 	var updates []Result
 	switch o.cmd {
 	case "prune":
-		rows := runPrune(staleBranchesAll(repos, !o.noPR), o.delete, o.force)
+		prog.phase("checking branches", leaders(repos))
+		branches := staleBranchesAll(repos, !o.noPR)
+		prog.stop()
+		rows := runPrune(branches, o.delete, o.force)
 		if o.json {
 			writeJSON(os.Stdout, pruneJSON(rows))
 		} else {
@@ -136,42 +143,70 @@ func main() {
 		}
 		return
 	case "stash":
+		prog.phase("reading stashes", leaders(repos))
+		stashes := stashesAll(repos)
+		prog.stop()
 		if o.json {
-			writeJSON(os.Stdout, stashJSON(stashesAll(repos)))
+			writeJSON(os.Stdout, stashJSON(stashes))
 		} else {
-			printStashes(os.Stdout, stashesAll(repos))
+			printStashes(os.Stdout, stashes)
 		}
 		return
 	case "update":
+		prog.phase("updating", leaders(repos))
 		updates = updateAll(repos)
 		if !o.json {
+			prog.stop()
 			printUpdates(os.Stdout, updates)
 			fmt.Println()
+			prog = startProgress()
 		}
+		prog.phase("reading repos", len(repos))
 		repos = collectAll(pathsOf(repos), withConflicts)
 		markLeaders(repos)
 		locate(repos, root)
 	}
 
+	local := time.Since(start)
 	var queue []ReviewReq
+	var gh time.Duration
 	ghMissing, failed := false, 0
 	if !o.noPR {
+		prog.phase("asking GitHub", leaders(repos))
 		var ghFound bool
 		ghFound, queue = attachAll(repos, search)
 		ghMissing, failed = !ghFound, countPRErrs(repos)
+		if ghFound {
+			gh = time.Since(start) - local
+		}
 	}
+	prog.stop()
+	total := time.Since(start)
 	if o.json {
-		writeJSON(os.Stdout, statusJSON(repos, queue, updates, failed, ghMissing))
+		doc := statusJSON(repos, queue, updates, failed, ghMissing)
+		doc.Timing = &jsonTiming{TotalMs: total.Milliseconds(), GitMs: local.Milliseconds(), GitHubMs: gh.Milliseconds()}
+		writeJSON(os.Stdout, doc)
 		return
 	}
-	note := ""
+	parts := []string{}
 	if ghMissing {
-		note = "gh not installed, PR columns hidden"
+		parts = append(parts, "gh not installed, PR columns hidden")
 	} else if failed > 0 {
-		note = prLookupNote(failed)
+		parts = append(parts, prLookupNote(failed))
 	}
-	printTable(os.Stdout, repos, o.cmd == "update", note)
+	parts = append(parts, timingLine(total, local, gh))
+	printTable(os.Stdout, repos, o.cmd == "update", strings.Join(parts, " · "))
 	printReviewQueue(os.Stdout, queue)
+}
+
+func leaders(repos []Repo) int {
+	n := 0
+	for _, r := range repos {
+		if !r.Follower {
+			n++
+		}
+	}
+	return n
 }
 
 // repoPaths filters discovered paths by directory name only.

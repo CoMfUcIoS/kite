@@ -263,7 +263,10 @@ func realPath(p string) string {
 // stash never do, so it would be pure waste there.
 func collectAll(paths []string, withConflicts bool) []Repo {
 	out := make([]Repo, len(paths))
-	fan(len(paths), func(i int) { out[i] = collect(paths[i], withConflicts) })
+	fan(len(paths), func(i int) {
+		out[i] = collect(paths[i], withConflicts)
+		prog.tick()
+	})
 	return out
 }
 
@@ -426,7 +429,10 @@ func updateAll(repos []Repo) []Result {
 		}
 	}
 	out := make([]Result, len(leaders))
-	fan(len(leaders), func(i int) { out[i] = update(leaders[i]) })
+	fan(len(leaders), func(i int) {
+		out[i] = update(leaders[i])
+		prog.tick()
+	})
 	return out
 }
 
@@ -573,6 +579,7 @@ func staleBranchesAll(repos []Repo, useGH bool) []Branch {
 	fan(len(repos), func(i int) {
 		if !repos[i].Follower {
 			perRepo[i], live[i] = scanBranches(repos[i])
+			prog.tick()
 		}
 	})
 
@@ -743,7 +750,12 @@ type Stash struct {
 
 func stashesAll(repos []Repo) []Stash {
 	perRepo := make([][]Stash, len(repos))
-	fan(len(repos), func(i int) { perRepo[i] = stashList(repos[i]) })
+	fan(len(repos), func(i int) {
+		perRepo[i] = stashList(repos[i])
+		if !repos[i].Follower {
+			prog.tick()
+		}
+	})
 
 	var all []Stash
 	for _, ss := range perRepo {

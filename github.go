@@ -76,6 +76,7 @@ func attachPRs(repos []Repo) {
 		var ok bool
 		lists[i], ok = listPRs(r.Path)
 		r.PRErr = !ok
+		prog.tick()
 	})
 	assignPRs(repos, lists)
 	fan(len(repos), func(i int) {
