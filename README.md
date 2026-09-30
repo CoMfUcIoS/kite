@@ -116,25 +116,31 @@ built against, that distinction accounted for two thirds of the dead branches.
 
 But a vanished upstream is not proof of a merge either: closing a pull request
 without merging also deletes its branch, and that branch may hold the only copy
-of the work. So there are three tiers:
+of the work. So there are four tiers:
 
 | What kite found                              | What it does                                       |
 | -------------------------------------------- | -------------------------------------------------- |
 | an ancestor of the default branch            | deletes with `git branch -d`, so git double-checks |
 | upstream gone, and `gh` confirms a merged PR | deletes with `-D`                                  |
+| upstream kept, a merged PR of yours contains the branch tip | deletes with `-D` |
 | upstream gone, no merged PR found            | reports it, needs `--force`                        |
+
+The third row covers squash merges that kept their head branch, which leave no
+local trace at all. kite asks GitHub once per repo for your 100 most recent
+merged PRs, and a branch with new commits beyond its PR's head is left alone.
 
 A branch checked out in any worktree of the repo is never deleted, not even with
 `--force`, because removing it would mean switching away and kite never switches
 branches.
 
-There's one exception, for the worktree-per-PR workflow. Once a PR merges and its
-remote branch is deleted, the branch's linked worktree is dead weight. If that
+There's one exception, for the worktree-per-PR workflow. Once a PR merges, the
+branch's linked worktree is dead weight. If that
 worktree is clean, with nothing modified, untracked or ignored, prune offers to
 remove it (`would remove worktree and delete`) and `--delete` runs
 `git worktree remove` before deleting the branch. The same tiers apply, so an
 unconfirmed merge still needs `--force`. The main checkout is never removed, and
-neither is a worktree you haven't pushed from yet.
+neither is a worktree without a merged PR or a deleted remote branch to show its
+work is done.
 
 ## Finding forgotten work
 

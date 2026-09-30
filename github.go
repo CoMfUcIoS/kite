@@ -287,6 +287,36 @@ func mergedPR(dir, branch string) int {
 	return list[0].Number
 }
 
+type ghMergedPR struct {
+	Number      int    `json:"number"`
+	HeadRefName string `json:"headRefName"`
+	HeadRefOid  string `json:"headRefOid"`
+}
+
+// mergedPRsArgs covers only your 100 most recent merged PRs per repo; a branch
+// merged longer ago than that isn't found this way.
+func mergedPRsArgs() []string {
+	return []string{"pr", "list", "--state", "merged", "--author", "@me", "--limit", "100",
+		"--json", "number,headRefName,headRefOid"}
+}
+
+func listMergedPRs(dir string) []ghMergedPR {
+	ctx, cancel := context.WithTimeout(context.Background(), prTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "gh", mergedPRsArgs()...)
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	var list []ghMergedPR
+	if json.Unmarshal(out, &list) != nil {
+		return nil
+	}
+	return list
+}
+
 type ghSearchPR struct {
 	Number     int       `json:"number"`
 	Title      string    `json:"title"`
