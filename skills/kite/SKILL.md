@@ -24,6 +24,7 @@ Run it from the directory that holds the repos, or pass `--root <dir>`.
 | Which branches are finished?                           | `kite prune` (dry run)      |
 | cd into a repo                                         | `cd "$(kite path <name>)"`  |
 | Local state only, no GitHub                            | add `--no-pr`               |
+| Answer as data, not a table                            | add `--json`                |
 
 `--no-pr` also removes the `PR`, `RV` and `CI` columns and the indented PR rows. Leave it off
 for any question about PRs, reviews or CI.
@@ -66,5 +67,5 @@ rather than guessing when more than one repo matches.
 - Trusting `vs MAIN` right after a long break. Check the footer's fetch age.
 - Running `kite` from inside one repo. It scans the current directory's children, so point
   `--root` at the parent.
-- Treating a table as machine output. Colour turns off when piped, but the layout is for people:
-  filter it with `kite <filter>` rather than parsing columns.
+- Parsing the table. The layout is for people. Add `--json` to `status`, `update`, `stash` or
+  `prune` and read the fields instead: `dirty`, `behindMain`, `conflicts`, `pr.ci` and so on.

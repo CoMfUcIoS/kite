@@ -369,6 +369,10 @@ func TestParseArgs(t *testing.T) {
 		{args: []string{"--version"}, want: opts{cmd: "version"}},
 		// A bare command wins over being read as a filter.
 		{args: []string{"version"}, want: opts{cmd: "version"}},
+		{args: []string{"--json"}, want: opts{cmd: "status", json: true}},
+		{args: []string{"stash", "-json"}, want: opts{cmd: "stash", json: true}},
+		{args: []string{"prune", "--json", "api"}, want: opts{cmd: "prune", filter: "api", json: true}},
+		{args: []string{"path", "--json"}, wantErr: true},
 		{args: []string{"--root"}, wantErr: true},
 		{args: []string{"--root="}, wantErr: true},
 		{args: []string{"--bogus"}, wantErr: true},
@@ -2047,9 +2051,189 @@ func TestPruneGoneWorktreeNeedsForce(t *testing.T) {
 func TestPrintPruneNamesTheWorktree(t *testing.T) {
 	branches := []Branch{{Repo: "app", Name: "done", Default: "main", Merged: true, Worktree: "/w/app-done", CheckedOutIn: "app-done"}}
 	var buf bytes.Buffer
-	printPrune(&buf, branches, false, false)
+	printPrune(&buf, runPrune(branches, false, false), false)
 	out := stripANSI(buf.String())
 	if !strings.Contains(out, "merged into main, worktree app-done") || !strings.Contains(out, "would remove worktree and delete") {
 		t.Errorf("prune should say the worktree goes too:\n%s", out)
+	}
+}
+
+// roundTrip renders v the way --json does and decodes it generically, so the
+// assertions see the wire keys rather than the Go field names.
+func roundTrip(t *testing.T, v any) any {
+	t.Helper()
+	var buf bytes.Buffer
+	writeJSON(&buf, v)
+	var out any
+	if err := json.Unmarshal(buf.Bytes(), &out); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, buf.String())
+	}
+	return out
+}
+
+func TestStatusJSON(t *testing.T) {
+	_, clone := workspace(t)
+	wt := addWorktree(t, clone, "feat")
+	writeFile(t, wt, "wip.txt", "wip")
+	writeFile(t, clone, "one.txt", "modified")
+	mustGit(t, clone, "stash", "push", "-m", "shared")
+	mustGit(t, clone, "fetch", "-q", "origin")
+
+	root := filepath.Dir(clone)
+	repos := collectAll(withWorktrees(discover(root)), true)
+	markLeaders(repos)
+	locate(repos, root)
+
+	doc := roundTrip(t, statusJSON(repos, nil, nil, 2, false)).(map[string]any)
+	if doc["prLookupFailed"] != 2.0 || doc["ghMissing"] != false {
+		t.Errorf("prLookupFailed/ghMissing = %v/%v, want 2/false", doc["prLookupFailed"], doc["ghMissing"])
+	}
+	if q, ok := doc["reviewQueue"].([]any); !ok || len(q) != 0 {
+		t.Errorf("reviewQueue = %#v, want an empty array rather than null", doc["reviewQueue"])
+	}
+	if _, ok := doc["updates"]; ok {
+		t.Error("updates present on plain status")
+	}
+	list := doc["repos"].([]any)
+	if len(list) != 2 {
+		t.Fatalf("got %d repos, want the clone and its worktree", len(list))
+	}
+
+	leader, follower := list[0].(map[string]any), list[1].(map[string]any)
+	if leader["name"] != "work" || follower["name"] != "work-feat" {
+		t.Fatalf("order = %v, %v, want the leader first", leader["name"], follower["name"])
+	}
+	for _, k := range []string{"name", "path", "where", "branch", "default", "detached", "dirty",
+		"ahead", "behind", "noUpstream", "behindMain", "conflicts", "stashes", "lastCommit", "fetchedAt"} {
+		if _, ok := leader[k]; !ok {
+			t.Errorf("leader missing key %q: %v", k, leader)
+		}
+	}
+	for _, k := range []string{"worktreeOf", "pr", "otherPRs", "error", "refs", "localBranches", "Refs", "LocalBranches"} {
+		if _, ok := leader[k]; ok {
+			t.Errorf("leader carries key %q it should not: %v", k, leader)
+		}
+	}
+	if leader["stashes"] != 1.0 {
+		t.Errorf("leader stashes = %v, want 1", leader["stashes"])
+	}
+	if ts, err := time.Parse(time.RFC3339, leader["lastCommit"].(string)); err != nil || ts.IsZero() {
+		t.Errorf("lastCommit = %v, want RFC 3339: %v", leader["lastCommit"], err)
+	}
+
+	if _, ok := follower["stashes"]; ok {
+		t.Errorf("follower carries the shared stash count: %v", follower)
+	}
+	if follower["worktreeOf"] != "work" {
+		t.Errorf("worktreeOf = %v, want work", follower["worktreeOf"])
+	}
+	if follower["dirty"] != 1.0 || follower["branch"] != "feat" || follower["where"] != "work-feat" {
+		t.Errorf("follower = %v, want dirty 1 on feat at work-feat", follower)
+	}
+}
+
+func TestStatusJSONPRsAndUpdates(t *testing.T) {
+	repos := []Repo{{
+		Name: "caddy", Branch: "feat/h3", Default: "main",
+		PR:     &PR{Number: 7, Review: revApproved, CI: ciFail, Failing: "lint", Extra: 2},
+		Others: []PRRow{{Branch: "feat/other", Resolved: true, BehindMain: 3, Conflicts: true, PR: PR{Number: 8, CI: ciPass}}},
+	}}
+	queue := []ReviewReq{{Repo: "caddy", Number: 9, Title: "review me", Created: time.Unix(1700000000, 0)}}
+	updates := []Result{{Repo: "caddy", Default: "main", Status: statusAdvanced, Delta: 4}}
+
+	doc := roundTrip(t, statusJSON(repos, queue, updates, 0, true)).(map[string]any)
+	if doc["ghMissing"] != true {
+		t.Error("ghMissing = false, want true")
+	}
+	r := doc["repos"].([]any)[0].(map[string]any)
+	pr := r["pr"].(map[string]any)
+	if pr["number"] != 7.0 || pr["review"] != revApproved || pr["ci"] != ciFail || pr["failing"] != "lint" || pr["extraFailing"] != 2.0 {
+		t.Errorf("pr = %v", pr)
+	}
+	if _, ok := r["lastCommit"]; ok {
+		t.Error("a zero lastCommit must be omitted, not rendered as year 1")
+	}
+	o := r["otherPRs"].([]any)[0].(map[string]any)
+	if o["branch"] != "feat/other" || o["behindMain"] != 3.0 || o["conflicts"] != true || o["resolved"] != true {
+		t.Errorf("otherPRs[0] = %v", o)
+	}
+	if o["pr"].(map[string]any)["number"] != 8.0 {
+		t.Errorf("otherPRs[0].pr = %v", o["pr"])
+	}
+	q := doc["reviewQueue"].([]any)[0].(map[string]any)
+	if q["repo"] != "caddy" || q["number"] != 9.0 || q["title"] != "review me" || q["createdAt"] == nil {
+		t.Errorf("reviewQueue[0] = %v", q)
+	}
+	u := doc["updates"].([]any)[0].(map[string]any)
+	if u["repo"] != "caddy" || u["status"] != statusAdvanced || u["delta"] != 4.0 {
+		t.Errorf("updates[0] = %v", u)
+	}
+}
+
+func TestStatusJSONReportsBrokenRepo(t *testing.T) {
+	isolateGit(t)
+	dir := filepath.Join(t.TempDir(), "broken")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, dir, ".git", "gitdir: /nonexistent/kite-test")
+
+	r := collect(dir, true)
+	if r.Err == nil {
+		t.Fatal("test setup: collect succeeded on a broken repo")
+	}
+	doc := roundTrip(t, statusJSON([]Repo{r}, nil, nil, 0, false)).(map[string]any)
+	got := doc["repos"].([]any)[0].(map[string]any)
+	if msg, _ := got["error"].(string); msg == "" {
+		t.Errorf("error missing on a broken repo: %v", got)
+	}
+}
+
+func TestStashJSON(t *testing.T) {
+	_, clone := workspace(t)
+	writeFile(t, clone, "one.txt", "modified")
+	mustGit(t, clone, "stash", "push", "-m", "keep this <for> later")
+
+	list := roundTrip(t, stashJSON(stashesAll([]Repo{collect(clone, false)}))).([]any)
+	if len(list) != 1 {
+		t.Fatalf("got %d stashes, want 1", len(list))
+	}
+	s := list[0].(map[string]any)
+	if s["repo"] != "work" || s["ref"] != "stash@{0}" || s["age"] == "" ||
+		!strings.Contains(s["subject"].(string), "keep this <for> later") {
+		t.Errorf("stash = %v", s)
+	}
+
+	if empty := roundTrip(t, stashJSON(nil)).([]any); len(empty) != 0 {
+		t.Errorf("no stashes = %v, want []", empty)
+	}
+}
+
+func TestPruneJSONDryRun(t *testing.T) {
+	clone, got := staleFixture(t)
+	var branches []Branch
+	for _, b := range got {
+		branches = append(branches, b)
+	}
+
+	list := roundTrip(t, pruneJSON(runPrune(branches, false, false))).([]any)
+	if len(list) != 2 {
+		t.Fatalf("got %d entries, want 2: %v", len(list), list)
+	}
+	want := map[string][3]string{
+		"gone-branch":   {pruneUnsure, "upstream gone, merge unconfirmed", "needs --force"},
+		"merged-branch": {pruneMerged, "merged into main", "would delete"},
+	}
+	for i, name := range []string{"gone-branch", "merged-branch"} {
+		e := list[i].(map[string]any)
+		w := want[name]
+		if e["repo"] != "work" || e["branch"] != name || e["verdict"] != w[0] || e["reason"] != w[1] || e["action"] != w[2] {
+			t.Errorf("entry %d = %v, want %s %v", i, e, name, w)
+		}
+	}
+	for _, b := range []string{"merged-branch", "gone-branch"} {
+		if mustGit(t, clone, "branch", "--list", b) == "" {
+			t.Errorf("a dry run deleted %s", b)
+		}
 	}
 }
