@@ -533,8 +533,8 @@ func TestPrintTableRendersSubRowsForOtherBranchPRs(t *testing.T) {
 		return -1, ""
 	}
 
-	newerLine, newerText := findLine("└ feat/newer")
-	olderLine, olderText := findLine("└ feat/older")
+	newerLine, newerText := findLine("↳ feat/newer")
+	olderLine, olderText := findLine("↳ feat/older")
 	if newerLine >= olderLine {
 		t.Errorf("sub-rows out of order: want feat/newer (newest commit) before feat/older, got newer at line %d, older at line %d", newerLine, olderLine)
 	}
@@ -552,7 +552,7 @@ func TestPrintTableRendersSubRowsForOtherBranchPRs(t *testing.T) {
 	// o.Resolved gates whether vs MAIN shows a real value or renders blank
 	// (via subRowMainCell, main.go:501-502). Columns: [branch, DIRTY, ↑↓,
 	// vs MAIN, STASH, LAST, PR, ...].
-	_, noUpstreamText := findLine("└ feat/no-upstream")
+	_, noUpstreamText := findLine("↳ feat/no-upstream")
 	noUpstreamCols := colGaps(noUpstreamText)
 	if len(noUpstreamCols) < 4 {
 		t.Fatalf("feat/no-upstream sub-row has too few columns: %v", noUpstreamCols)
@@ -564,7 +564,7 @@ func TestPrintTableRendersSubRowsForOtherBranchPRs(t *testing.T) {
 		t.Errorf("feat/no-upstream vs MAIN = %q, want \"-3\" (a resolved branch must still report BehindMain)", noUpstreamCols[3])
 	}
 
-	_, unresolvedText := findLine("└ feat/unresolved")
+	_, unresolvedText := findLine("↳ feat/unresolved")
 	unresolvedCols := colGaps(unresolvedText)
 	if len(unresolvedCols) < 3 {
 		t.Fatalf("feat/unresolved sub-row has too few columns: %v", unresolvedCols)
@@ -1318,7 +1318,7 @@ func TestRenderGridAlignmentWithSubRows(t *testing.T) {
 		{hue(dim, "REPO"), hue(dim, "BRANCH"), hue(dim, "vs MAIN"), hue(dim, "PR"), hue(dim, "RV"), hue(dim, "CI")},
 		{txt("caddy"), txt("main"), hue(dim, "-"), txt(""), txt(""), txt("")},
 		{
-			txt(""), hue(cyan, "└ feat/http3-probe"), hue(red, "-14!"), txt("#3232"), hue(dim, "·"),
+			txt(""), hue(cyan, "↳ feat/http3-probe"), hue(red, "-14!"), txt("#3232"), hue(dim, "·"),
 			rawCell(hue(red, "✗").String() + " " + hue(dim, "lint +2").String()),
 		},
 		{txt("grafana"), hue(cyan, "fix/nil-deref"), txt("-4"), txt("#887"), hue(green, "✓"), hue(green, "✓")},

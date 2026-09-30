@@ -43,7 +43,8 @@ rather than guessing when more than one repo matches.
   would conflict. `-` means level with main. Blank means unknown.
 - `PR`, `RV` and `CI` show only when there's data. RV: `✓` approved, `✗` changes requested,
   `·` waiting, `✎` draft.
-- Indented `└` rows are your open-PR branches that aren't checked out.
+- Indented `↳` rows in BRANCH are your open-PR branches that aren't checked out. `├`/`└` in REPO
+  mark linked worktrees instead.
 - Linked worktrees sit under their main checkout as `├`/`└` rows in the REPO column, named by
   their path relative to the root (`~/…` when outside it). Stashes, PR sub-rows and the
   `stash`, `prune` and `update` lines come once per repo, so a blank STASH on a worktree row
