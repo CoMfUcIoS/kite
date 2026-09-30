@@ -97,6 +97,8 @@ type jsonPrune struct {
 	Verdict string `json:"verdict"`
 	Reason  string `json:"reason"`
 	Action  string `json:"action"`
+	// Worktree is the directory --delete removes with the branch.
+	Worktree string `json:"worktree,omitempty"`
 }
 
 func writeJSON(w io.Writer, v any) {
@@ -173,7 +175,7 @@ func stashJSON(stashes []Stash) []jsonStash {
 func pruneJSON(rows []pruneRow) []jsonPrune {
 	out := make([]jsonPrune, 0, len(rows))
 	for _, p := range rows {
-		out = append(out, jsonPrune{Repo: p.Repo, Branch: p.Name, Verdict: p.verdict(), Reason: p.reason, Action: p.action})
+		out = append(out, jsonPrune{Repo: p.Repo, Branch: p.Name, Verdict: p.verdict(), Reason: p.reason, Action: p.action, Worktree: p.Worktree})
 	}
 	return out
 }

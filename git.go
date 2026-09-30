@@ -95,17 +95,31 @@ type Repo struct {
 // actually lives.
 func locate(repos []Repo, root string) {
 	rr := realPath(root)
-	home, _ := os.UserHomeDir()
 	for i := range repos {
 		p := realPath(repos[i].Path)
 		if rel, err := filepath.Rel(rr, p); err == nil && !strings.HasPrefix(rel, "..") {
 			repos[i].Where = rel
-		} else if rel, err := filepath.Rel(realPath(home), p); home != "" && err == nil && !strings.HasPrefix(rel, "..") {
-			repos[i].Where = "~/" + rel
 		} else {
-			repos[i].Where = p
+			repos[i].Where = tilde(p)
 		}
 	}
+}
+
+// tilde abbreviates a path under the home directory to ~/…
+func tilde(p string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return p
+	}
+	for _, h := range []string{home, realPath(home)} {
+		if p == h {
+			return "~"
+		}
+		if rest, ok := strings.CutPrefix(p, h+string(filepath.Separator)); ok {
+			return "~/" + rest
+		}
+	}
+	return p
 }
 
 func groupKey(r Repo) string {

@@ -903,7 +903,7 @@ func runPrune(branches []Branch, doDelete, force bool) []pruneRow {
 			reason = "upstream gone, merge unconfirmed"
 		}
 		if b.Worktree != "" {
-			reason += ", worktree " + b.CheckedOutIn
+			reason += ", worktree " + tilde(b.Worktree)
 		}
 
 		switch {
@@ -935,7 +935,7 @@ func printPrune(w io.Writer, prs []pruneRow, doDelete bool) {
 	}
 
 	var rows [][]cell
-	deleted, wouldDelete, blocked, skipped, failed := 0, 0, 0, 0, 0
+	deleted, wouldDelete, blocked, skipped, failed, worktrees := 0, 0, 0, 0, 0, 0
 
 	for _, p := range prs {
 		if p.Err != nil {
@@ -960,12 +960,19 @@ func printPrune(w io.Writer, prs []pruneRow, doDelete bool) {
 		case "needs --force":
 			action = hue(yellow, p.action)
 			blocked++
-		case "would delete", "would remove worktree and delete":
+		case "would remove worktree and delete":
+			action = hue(cyan, p.action)
+			wouldDelete++
+			worktrees++
+		case "would delete":
 			action = hue(cyan, p.action)
 			wouldDelete++
 		case "deleted":
 			action = hue(green, p.action)
 			deleted++
+			if p.Worktree != "" {
+				worktrees++
+			}
 		default:
 			action = hue(red, p.action)
 			failed++
@@ -978,9 +985,15 @@ func printPrune(w io.Writer, prs []pruneRow, doDelete bool) {
 	var parts []string
 	if deleted > 0 {
 		parts = append(parts, fmt.Sprintf("%d deleted", deleted))
+		if doDelete && worktrees > 0 {
+			parts = append(parts, plural(worktrees, "worktree")+" removed")
+		}
 	}
 	if wouldDelete > 0 {
 		parts = append(parts, fmt.Sprintf("%d would delete", wouldDelete))
+		if worktrees > 0 {
+			parts = append(parts, fmt.Sprintf("%d would also remove a worktree", worktrees))
+		}
 	}
 	if blocked > 0 {
 		verb := "need"

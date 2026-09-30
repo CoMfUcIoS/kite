@@ -142,8 +142,10 @@ branches.
 There's one exception, for the worktree-per-PR workflow. Once a PR merges, the
 branch's linked worktree is dead weight. If that
 worktree is clean, with nothing modified, untracked or ignored, prune offers to
-remove it (`would remove worktree and delete`) and `--delete` runs
-`git worktree remove` before deleting the branch. The same tiers apply, so an
+remove it (`would remove worktree and delete`, with the directory's path in the
+reason) and `--delete` runs `git worktree remove` before deleting the branch. The
+footer counts those removals on their own, so you can see how many directories
+go before you say yes. The same tiers apply, so an
 unconfirmed merge still needs `--force`. The main checkout is never removed, and
 neither is a worktree without a merged PR or a deleted remote branch to show its
 work is done.
@@ -252,10 +254,11 @@ lives on the main checkout. Times are RFC 3339 and left out when unknown.
 `update --json` prints the same document after updating, plus an `updates`
 array of `{repo, branch, default, status, delta, error}`. `stash --json` is an
 array of `{repo, ref, age, subject}`, and `prune --json` an array of
-`{repo, branch, verdict, reason, action}`, where `action` is `would delete`,
-`would remove worktree and delete`, `deleted`, `needs --force`, `skipped` or
-`failed`. `path` rejects `--json`,
-since it already prints nothing but a path.
+`{repo, branch, verdict, reason, action, worktree}`. `worktree` is the directory
+`--delete` would remove, and it's there only when there is one. `action` is
+`would delete`, `would remove worktree and delete`, `deleted`, `needs --force`,
+`skipped` or `failed`. `path` rejects `--json`, since it already prints nothing
+but a path.
 
 ## Columns
 

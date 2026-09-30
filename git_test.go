@@ -2053,8 +2053,36 @@ func TestPrintPruneNamesTheWorktree(t *testing.T) {
 	var buf bytes.Buffer
 	printPrune(&buf, runPrune(branches, false, false), false)
 	out := stripANSI(buf.String())
-	if !strings.Contains(out, "merged into main, worktree app-done") || !strings.Contains(out, "would remove worktree and delete") {
-		t.Errorf("prune should say the worktree goes too:\n%s", out)
+	if !strings.Contains(out, "merged into main, worktree /w/app-done") || !strings.Contains(out, "would remove worktree and delete") {
+		t.Errorf("prune should name the directory that goes too:\n%s", out)
+	}
+	if !strings.Contains(out, "1 would delete · 1 would also remove a worktree") {
+		t.Errorf("footer should count worktree removals apart:\n%s", out)
+	}
+}
+
+func TestPruneJSONCarriesWorktreePath(t *testing.T) {
+	rows := runPrune([]Branch{
+		{Repo: "app", Name: "done", Default: "main", Merged: true, Worktree: "/w/app-done", CheckedOutIn: "app-done"},
+		{Repo: "app", Name: "plain", Default: "main", Merged: true},
+	}, false, false)
+	got := pruneJSON(rows)
+	if got[0].Worktree != "/w/app-done" || got[1].Worktree != "" {
+		t.Errorf("worktree = %q / %q, want the path on the first row only", got[0].Worktree, got[1].Worktree)
+	}
+}
+
+func TestTilde(t *testing.T) {
+	t.Setenv("HOME", "/home/you")
+	for in, want := range map[string]string{
+		"/home/you/src/app": "~/src/app",
+		"/home/you":         "~",
+		"/srv/app":          "/srv/app",
+		"/home/yours/app":   "/home/yours/app",
+	} {
+		if got := tilde(in); got != want {
+			t.Errorf("tilde(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -2463,5 +2491,14 @@ func TestTimingLine(t *testing.T) {
 	}
 	if got := timingLine(700*time.Millisecond, 700*time.Millisecond, 0); got != "took 0.70s" {
 		t.Errorf("timingLine with no GitHub = %q, want just the total", got)
+	}
+}
+
+func TestPrintPruneCountsRemovedWorktrees(t *testing.T) {
+	rows := []pruneRow{{Branch{Repo: "app", Name: "done", Merged: true, Worktree: "/w/app-done"}, "merged into main", "deleted"}}
+	var buf bytes.Buffer
+	printPrune(&buf, rows, true)
+	if out := stripANSI(buf.String()); !strings.Contains(out, "1 deleted · 1 worktree removed") {
+		t.Errorf("footer should say the directory went too:\n%s", out)
 	}
 }
