@@ -2502,3 +2502,22 @@ func TestPrintPruneCountsRemovedWorktrees(t *testing.T) {
 		t.Errorf("footer should say the directory went too:\n%s", out)
 	}
 }
+
+// TestUsageDocumentsEverySymbol keeps --help in step with the renderer: every
+// glyph the table can draw and every value --json can emit must be explained.
+func TestUsageDocumentsEverySymbol(t *testing.T) {
+	want := []string{
+		"DIRTY", "↑↓", "vs MAIN", "STASH", "LAST", "RV", "CI",
+		"↑2↓3", "rewritten", "!", "├", "└", "↳", "✓", "✗", "·", "✎", "○",
+		ciPass, ciFail, ciPending,
+		revApproved, revChanges, revRequired, revDraft,
+		pruneMerged, prunePR, pruneUnsure, pruneCurrent, pruneErr,
+		"would remove worktree and delete", "needs --force",
+		"pr.failing", "worktreeOf", "rewritten", "timing",
+	}
+	for _, w := range want {
+		if !strings.Contains(usage, w) {
+			t.Errorf("--help never explains %q", w)
+		}
+	}
+}

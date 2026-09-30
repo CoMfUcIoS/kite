@@ -262,6 +262,9 @@ but a path.
 
 ## Columns
 
+`kite --help` ends with the same legend in short form, plus every value `--json`
+can emit, so you don't need this page open to read the table.
+
 | Column      | Meaning                                                                                                                                                                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `DIRTY`     | modified plus untracked files                                                                                                                                                                                                                                            |
