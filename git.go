@@ -519,6 +519,8 @@ type Branch struct {
 	// Worktree is a clean linked worktree holding the branch, which deleting
 	// the branch removes first. Set instead of Current.
 	Worktree string
+	// holder is that worktree before there's proof the work finished.
+	holder string
 
 	Err error
 }
@@ -564,9 +566,10 @@ func (b Branch) deletable(force bool) bool {
 
 func staleBranchesAll(repos []Repo, useGH bool) []Branch {
 	perRepo := make([][]Branch, len(repos))
+	live := make([][]Branch, len(repos))
 	fan(len(repos), func(i int) {
 		if !repos[i].Follower {
-			perRepo[i] = staleBranches(repos[i])
+			perRepo[i], live[i] = scanBranches(repos[i])
 		}
 	})
 
@@ -583,16 +586,57 @@ func staleBranchesAll(repos []Repo, useGH bool) []Branch {
 				b.PRNumber = mergedPR(b.Path, b.Name)
 			}
 		})
+		// A squash merge that kept its head branch leaves no local trace,
+		// so ask once per repo which of its live branches already merged.
+		finished := make([][]Branch, len(repos))
+		fan(len(repos), func(i int) {
+			if len(live[i]) > 0 {
+				finished[i] = matchMerged(live[i], listMergedPRs(repos[i].Path), repos[i].Path)
+			}
+		})
+		for _, bs := range finished {
+			all = append(all, bs...)
+		}
 	}
 	return all
 }
 
-// staleBranches fetches with --prune first, because the "[gone]" marker that
-// identifies a squash-merged branch only appears once the deleted remote branch
-// has been pruned locally.
+// matchMerged keeps the live branches a merged PR accounts for: same name, and
+// the local tip is the PR's head or behind it. New commits on a reused branch
+// name fail the ancestry check, and so does a head this clone never fetched.
+func matchMerged(live []Branch, prs []ghMergedPR, path string) []Branch {
+	var out []Branch
+	for _, b := range live {
+		for _, p := range prs {
+			if p.HeadRefName != b.Name {
+				continue
+			}
+			if _, err := git(path, "merge-base", "--is-ancestor", b.Name, p.HeadRefOid); err != nil {
+				continue
+			}
+			b.PRNumber = p.Number
+			if b.holder != "" {
+				b.Worktree, b.Current = b.holder, false
+			}
+			out = append(out, b)
+			break
+		}
+	}
+	return out
+}
+
 func staleBranches(r Repo) []Branch {
-	fail := func(err error) []Branch {
-		return []Branch{{Repo: r.Name, Path: r.Path, Err: err}}
+	stale, _ := scanBranches(r)
+	return stale
+}
+
+// scanBranches fetches with --prune first, because the "[gone]" marker that
+// identifies a squash-merged branch only appears once the deleted remote branch
+// has been pruned locally. live holds pushed branches that are neither merged
+// by ancestry nor gone: only a merged PR can say those are finished.
+func scanBranches(r Repo) (stale, live []Branch) {
+	fail := func(err error) ([]Branch, []Branch) {
+		return []Branch{{Repo: r.Name, Path: r.Path, Err: err}}, nil
 	}
 	if r.Err != nil {
 		return fail(r.Err)
@@ -602,19 +646,18 @@ func staleBranches(r Repo) []Branch {
 	}
 	def := defaultBranch(r.Path)
 	if def == "" {
-		return nil
+		return nil, nil
 	}
 
 	out, err := git(r.Path, "for-each-ref",
-		"--format=%(refname:short)%00%(upstream:track)%00%(worktreepath)", "refs/heads")
+		"--format=%(refname:short)%00%(upstream:track)%00%(worktreepath)%00%(upstream)", "refs/heads")
 	if err != nil {
 		return fail(err)
 	}
 
-	var branches []Branch
 	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Split(line, "\x00")
-		if len(fields) < 3 || fields[0] == "" || fields[0] == def {
+		if len(fields) < 4 || fields[0] == "" || fields[0] == def {
 			continue
 		}
 		b := Branch{
@@ -628,9 +671,12 @@ func staleBranches(r Repo) []Branch {
 		// branch checked out, not only this one.
 		if wt := fields[2]; wt != "" {
 			b.CheckedOutIn = filepath.Base(wt)
+			if removableWorktree(wt, r.Path) {
+				b.holder = wt
+			}
 			// Gone, not just merged: a worktree freshly branched from main
 			// also reads as merged, before any work has started in it.
-			if b.Gone && removableWorktree(wt, r.Path) {
+			if b.Gone && b.holder != "" {
 				b.Worktree = wt
 			} else {
 				b.Current = true
@@ -641,11 +687,14 @@ func staleBranches(r Repo) []Branch {
 		if _, err := git(r.Path, "merge-base", "--is-ancestor", b.Name, "origin/"+def); err == nil {
 			b.Merged = true
 		}
-		if b.Merged || b.Gone {
-			branches = append(branches, b)
+		switch {
+		case b.Merged || b.Gone:
+			stale = append(stale, b)
+		case fields[3] != "":
+			live = append(live, b)
 		}
 	}
-	return branches
+	return stale, live
 }
 
 // removableWorktree is a linked worktree other than the one kite runs git

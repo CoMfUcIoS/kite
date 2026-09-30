@@ -2305,3 +2305,81 @@ func TestStatusJSONCarriesRewritten(t *testing.T) {
 		t.Error("rewritten missing from the JSON row")
 	}
 }
+
+// liveMergedFixture pushes a branch from a worktree and leaves its remote
+// branch in place, the state a squash merge that kept its head branch leaves.
+func liveMergedFixture(t *testing.T) (clone, wt string) {
+	t.Helper()
+	_, clone = workspace(t)
+	wt = outsideWorktree(t, clone, "shipped")
+	writeFile(t, wt, "s.txt", "s")
+	mustGit(t, wt, "add", ".")
+	mustGit(t, wt, "commit", "-qm", "shipped work")
+	mustGit(t, wt, "push", "-q", "-u", "origin", "shipped")
+	return clone, wt
+}
+
+func TestScanBranchesKeepsLiveCandidates(t *testing.T) {
+	clone, wt := liveMergedFixture(t)
+	stale, live := scanBranches(collect(clone, false))
+	for _, b := range stale {
+		if b.Name == "shipped" {
+			t.Fatalf("a branch with a live upstream and no ancestry must not be stale: %+v", b)
+		}
+	}
+	if len(live) != 1 || live[0].Name != "shipped" {
+		t.Fatalf("live = %+v, want shipped", live)
+	}
+	if !live[0].Current || live[0].holder != wt && realPath(live[0].holder) != realPath(wt) {
+		t.Errorf("Current=%v holder=%q, want current with its worktree recorded", live[0].Current, live[0].holder)
+	}
+}
+
+func TestMatchMergedFinishesBranchAtPRHead(t *testing.T) {
+	clone, wt := liveMergedFixture(t)
+	_, live := scanBranches(collect(clone, false))
+	head := mustGit(t, clone, "rev-parse", "shipped")
+
+	got := matchMerged(live, []ghMergedPR{{Number: 7, HeadRefName: "shipped", HeadRefOid: head}}, clone)
+	if len(got) != 1 || got[0].PRNumber != 7 {
+		t.Fatalf("got %+v, want shipped matched to #7", got)
+	}
+	b := got[0]
+	if b.Current || b.Worktree == "" || !b.deletable(false) {
+		t.Errorf("Current=%v Worktree=%q deletable=%v, want its clean worktree removable", b.Current, b.Worktree, b.deletable(false))
+	}
+	if err := deleteBranch(b); err != nil {
+		t.Fatalf("deleteBranch: %v", err)
+	}
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Errorf("worktree survived: %v", err)
+	}
+}
+
+func TestMatchMergedIgnoresNewWorkAndMissingPRs(t *testing.T) {
+	clone, wt := liveMergedFixture(t)
+	head := mustGit(t, clone, "rev-parse", "shipped")
+	writeFile(t, wt, "more.txt", "more")
+	mustGit(t, wt, "add", ".")
+	mustGit(t, wt, "commit", "-qm", "after the merge")
+	_, live := scanBranches(collect(clone, false))
+
+	if got := matchMerged(live, []ghMergedPR{{Number: 7, HeadRefName: "shipped", HeadRefOid: head}}, clone); len(got) != 0 {
+		t.Errorf("got %+v, want a branch with work beyond the PR head left alone", got)
+	}
+	if got := matchMerged(live, []ghMergedPR{{Number: 8, HeadRefName: "other", HeadRefOid: head}}, clone); len(got) != 0 {
+		t.Errorf("got %+v, want no match without a PR for the branch", got)
+	}
+	if got := matchMerged(live, []ghMergedPR{{Number: 9, HeadRefName: "shipped", HeadRefOid: strings.Repeat("0", 40)}}, clone); len(got) != 0 {
+		t.Errorf("got %+v, want an unknown PR head treated as no match", got)
+	}
+}
+
+func TestMergedPRsArgs(t *testing.T) {
+	got := strings.Join(mergedPRsArgs(), " ")
+	for _, want := range []string{"--state merged", "--author @me", "--limit 100", "headRefOid"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("args %q missing %q", got, want)
+		}
+	}
+}
