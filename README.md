@@ -253,7 +253,7 @@ lives on the main checkout. Times are RFC 3339 and left out when unknown.
 
 `update --json` prints the same document after updating, plus an `updates`
 array of `{repo, branch, default, status, delta, error}`. `stash --json` is an
-array of `{repo, ref, age, subject}`, and `prune --json` an array of
+array of `{repo, ref, age, createdAt, subject}`, and `prune --json` an array of
 `{repo, branch, verdict, reason, action, worktree}`. `worktree` is the directory
 `--delete` would remove, and it's there only when there is one. `action` is
 `would delete`, `would remove worktree and delete`, `deleted`, `needs --force`,
