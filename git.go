@@ -83,6 +83,25 @@ type Repo struct {
 	Linked     bool // .git is a file: a linked worktree, not the main checkout
 	Follower   bool
 	LeaderName string
+	// Where is Path relative to --root, or ~-abbreviated when outside it.
+	Where string
+}
+
+// locate fills Where, so a row shows where a worktree kept outside the root
+// actually lives.
+func locate(repos []Repo, root string) {
+	rr := realPath(root)
+	home, _ := os.UserHomeDir()
+	for i := range repos {
+		p := realPath(repos[i].Path)
+		if rel, err := filepath.Rel(rr, p); err == nil && !strings.HasPrefix(rel, "..") {
+			repos[i].Where = rel
+		} else if rel, err := filepath.Rel(realPath(home), p); home != "" && err == nil && !strings.HasPrefix(rel, "..") {
+			repos[i].Where = "~/" + rel
+		} else {
+			repos[i].Where = p
+		}
+	}
 }
 
 func groupKey(r Repo) string {
@@ -374,9 +393,17 @@ func countLines(s string) int {
 
 // --- update ---
 
+// updateAll updates the leaders only: worktrees share their refs, and
+// concurrent fetches into one git dir fail on ref locks.
 func updateAll(repos []Repo) []Result {
-	out := make([]Result, len(repos))
-	fan(len(repos), func(i int) { out[i] = update(repos[i]) })
+	var leaders []Repo
+	for _, r := range repos {
+		if !r.Follower {
+			leaders = append(leaders, r)
+		}
+	}
+	out := make([]Result, len(leaders))
+	fan(len(leaders), func(i int) { out[i] = update(leaders[i]) })
 	return out
 }
 
@@ -405,12 +432,13 @@ func update(r Repo) Result {
 	before, _ := git(r.Path, "rev-parse", "--verify", "--quiet", "refs/heads/"+def)
 
 	var err error
-	if !r.Detached && r.Branch == def {
-		// On the default branch. A no-network ff-only merge, which refuses
-		// rather than overwriting a modified file.
-		_, err = git(r.Path, "merge", "--ff-only", "origin/"+def)
+	if wt := checkedOutAt(r.Path, def); wt != "" {
+		// Checked out in some worktree, maybe this one, where fetch below
+		// would refuse. A no-network ff-only merge there refuses rather than
+		// overwriting a modified file.
+		_, err = git(wt, "merge", "--ff-only", "origin/"+def)
 	} else {
-		// Elsewhere. Fetching from "." moves the local ref without a checkout,
+		// Not checked out anywhere. Fetching from "." moves the local ref without a checkout,
 		// so the working tree and current branch stay exactly where they are.
 		// Git enforces fast-forward and exits non-zero otherwise.
 		_, err = git(r.Path, "fetch", ".", "origin/"+def+":"+def)
@@ -433,6 +461,12 @@ func update(r Repo) Result {
 		}
 	}
 	return res
+}
+
+// checkedOutAt returns the worktree that has branch checked out, or "".
+func checkedOutAt(path, branch string) string {
+	s, _ := git(path, "for-each-ref", "--format=%(worktreepath)", "refs/heads/"+branch)
+	return s
 }
 
 func classify(err error) string {

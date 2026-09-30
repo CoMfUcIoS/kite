@@ -116,6 +116,7 @@ func main() {
 		os.Exit(1)
 	}
 	markLeaders(repos)
+	locate(repos, root)
 
 	switch o.cmd {
 	case "prune":
@@ -129,6 +130,7 @@ func main() {
 		fmt.Println()
 		repos = collectAll(pathsOf(repos), withConflicts)
 		markLeaders(repos)
+		locate(repos, root)
 	}
 
 	note := ""
@@ -505,7 +507,7 @@ func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
 	// as fresh as its newest fetch.
 	newestFetch := map[string]time.Time{}
 
-	for _, r := range repos {
+	for i, r := range repos {
 		if r.Err != nil {
 			broken = append(broken, r)
 			continue
@@ -519,7 +521,7 @@ func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
 		if k := groupKey(r); r.FetchedAt.After(newestFetch[k]) {
 			newestFetch[k] = r.FetchedAt
 		}
-		addRow(txt(r.Name), r.branchCell(), r.dirtyCell(),
+		addRow(txt(repoLabel(repos, i)), r.branchCell(), r.dirtyCell(),
 			upstreamCell(r.Ahead, r.Behind, r.NoUpstream),
 			behindMainCell(r.BehindMain, r.Conflicts),
 			r.stashCell(), r.LastCommit, r.PR)
@@ -602,6 +604,20 @@ func printReviewQueue(w io.Writer, qs []ReviewReq) {
 		})
 	}
 	renderGrid(w, rows, 2)
+}
+
+// repoLabel draws a follower as a branch of its group's tree. repos must be
+// sorted, so a group's followers are contiguous after their leader.
+func repoLabel(repos []Repo, i int) string {
+	r := repos[i]
+	name := cmp.Or(r.Where, r.Name)
+	if !r.Follower {
+		return name
+	}
+	if i+1 < len(repos) && repos[i+1].Follower && repos[i+1].LeaderName == r.LeaderName {
+		return "├ " + name
+	}
+	return "└ " + name
 }
 
 func (r Repo) branchCell() cell {

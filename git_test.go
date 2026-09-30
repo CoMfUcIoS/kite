@@ -1745,7 +1745,7 @@ func TestPrintTableGroupsWorktrees(t *testing.T) {
 
 	var order []string
 	for _, l := range lines[1:4] {
-		order = append(order, strings.Fields(l)[0])
+		order = append(order, strings.Fields(strings.TrimLeft(l, "├└ "))[0])
 	}
 	if strings.Join(order, ",") != "mid,zeta,alpha" {
 		t.Errorf("row order = %v, want mid,zeta,alpha: a group sorts by its leader, leader first", order)
@@ -1835,5 +1835,83 @@ func TestPrintTableFetchAgeIsNewestPerGroup(t *testing.T) {
 	printTable(&buf, repos, false, "")
 	if out := stripANSI(buf.String()); !strings.Contains(out, "fetched just now") {
 		t.Errorf("a worktree shares its repo's remote refs, so one fresh fetch covers the group:\n%s", out)
+	}
+}
+
+func TestUpdateFastForwardsMainCheckedOutInSibling(t *testing.T) {
+	origin, clone := workspace(t)
+	mustGit(t, clone, "switch", "-qc", "feature")
+	wt := filepath.Join(t.TempDir(), "on-main")
+	mustGit(t, clone, "worktree", "add", "-q", wt, "main")
+	addRemoteCommit(t, origin, "two.txt")
+
+	res := update(collect(clone, true))
+	if res.Status != statusAdvanced || res.Delta != 1 {
+		t.Fatalf("Status = %q Delta = %d, want advanced/1 (err = %v)", res.Status, res.Delta, res.Err)
+	}
+	if _, err := os.Stat(filepath.Join(wt, "two.txt")); err != nil {
+		t.Errorf("the worktree holding main was not fast-forwarded: %v", err)
+	}
+	if got := mustGit(t, clone, "branch", "--show-current"); got != "feature" {
+		t.Errorf("leader branch = %q, want feature", got)
+	}
+	if _, err := os.Stat(filepath.Join(clone, "two.txt")); err == nil {
+		t.Error("origin/main content leaked into the leader's feature working tree")
+	}
+}
+
+func TestUpdateAllOncePerGroup(t *testing.T) {
+	origin, clone := workspace(t)
+	a := addWorktree(t, clone, "a")
+	b := outsideWorktree(t, clone, "b")
+	addRemoteCommit(t, origin, "two.txt")
+
+	repos := collectAll([]string{clone, a, b}, true)
+	markLeaders(repos)
+	results := updateAll(repos)
+	if len(results) != 1 {
+		t.Fatalf("got %d results %+v, want one for the group", len(results), results)
+	}
+	if r := results[0]; r.Repo != "work" || r.Status != statusAdvanced || r.Err != nil {
+		t.Errorf("result = %+v, want work advanced with no error", r)
+	}
+}
+
+func TestLocate(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "root")
+	for _, d := range []string{"root/a", "root/_wt/b", "other/c"} {
+		if err := os.MkdirAll(filepath.Join(base, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("HOME", base)
+	repos := []Repo{
+		{Path: filepath.Join(root, "a")},
+		{Path: filepath.Join(root, "_wt", "b")},
+		{Path: filepath.Join(base, "other", "c")},
+	}
+	locate(repos, root)
+	for i, want := range []string{"a", filepath.Join("_wt", "b"), "~/" + filepath.Join("other", "c")} {
+		if repos[i].Where != want {
+			t.Errorf("Where = %q, want %q", repos[i].Where, want)
+		}
+	}
+}
+
+func TestPrintTableMarksWorktreeRows(t *testing.T) {
+	repos := []Repo{
+		{Name: "app", Branch: "main", Default: "main", LeaderName: "app"},
+		{Name: "b", Where: "_wt/b", Branch: "b", Default: "main", Follower: true, LeaderName: "app"},
+		{Name: "a", Where: "_wt/a", Branch: "a", Default: "main", Follower: true, LeaderName: "app"},
+		{Name: "solo", Branch: "main", Default: "main"},
+	}
+	var buf bytes.Buffer
+	printTable(&buf, repos, false, "")
+	lines := strings.Split(stripANSI(buf.String()), "\n")
+	for i, want := range []string{"app ", "├ _wt/a ", "└ _wt/b ", "solo "} {
+		if !strings.HasPrefix(lines[i+1], want) {
+			t.Errorf("row %d = %q, want it to start with %q", i+1, lines[i+1], want)
+		}
 	}
 }
