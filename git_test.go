@@ -2419,3 +2419,49 @@ func TestCollectCountsUntrackedWithCacheOn(t *testing.T) {
 		t.Errorf("Dirty = %d after adding a file, want 2: the cache must not go stale", r.Dirty)
 	}
 }
+
+func TestProgressRendersPhaseAndCount(t *testing.T) {
+	var buf bytes.Buffer
+	p := &progress{w: &buf}
+	p.phase("reading repos", 3)
+	p.tick()
+	p.tick()
+	p.render(0)
+	if got := buf.String(); !strings.Contains(got, "reading repos 2/3") || !strings.HasPrefix(got, "\r\033[K") {
+		t.Errorf("render = %q, want a cleared line with the phase and count", got)
+	}
+	buf.Reset()
+	p.stop()
+	if got := buf.String(); got != "\r\033[K" {
+		t.Errorf("stop wrote %q, want just the line cleared", got)
+	}
+}
+
+func TestProgressNilIsSilent(t *testing.T) {
+	var p *progress
+	p.phase("reading repos", 3)
+	p.tick()
+	p.stop()
+}
+
+func TestFmtDur(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		40 * time.Millisecond:   "0.04s",
+		700 * time.Millisecond:  "0.70s",
+		2460 * time.Millisecond: "2.5s",
+		75 * time.Second:        "75s",
+	} {
+		if got := fmtDur(d); got != want {
+			t.Errorf("fmtDur(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
+
+func TestTimingLine(t *testing.T) {
+	if got := timingLine(2460*time.Millisecond, 700*time.Millisecond, 1700*time.Millisecond); got != "took 2.5s · git 0.70s · GitHub 1.7s" {
+		t.Errorf("timingLine = %q", got)
+	}
+	if got := timingLine(700*time.Millisecond, 700*time.Millisecond, 0); got != "took 0.70s" {
+		t.Errorf("timingLine with no GitHub = %q, want just the total", got)
+	}
+}

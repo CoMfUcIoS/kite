@@ -16,7 +16,7 @@ terraform   fix/module-nil-deref    -      ↑1  -31      -      23h   #887   ·
 traefik     release/v3              -      ·   -        -      3w
 vault       chore/bump-deps         -      -   -8       -      4d    #152   ✎
 
-7 repos · 1 dirty · 1 stash · 6 open PRs · 1 red · oldest fetch 1d ago (kite update)
+7 repos · 1 dirty · 1 stash · 6 open PRs · 1 red · oldest fetch 1d ago (kite update) · took 1.4s · git 0.31s · GitHub 1.1s
 
 waiting on you
   caddy    #150  4d  feat: add h3 fallback probe
@@ -32,6 +32,12 @@ MAIN` is blank instead of a number. `terraform` is 31 behind main and waiting
 on a reviewer. `traefik` has no upstream at all. `vault`'s PR is still a draft.
 And two of those PRs, on `caddy` and `grafana`, are waiting on a review from
 you.
+
+While it works, kite shows a spinner with a count (`reading repos 12/45`, then
+`asking GitHub 3/27`) on stderr, and clears it before the table prints. It only
+appears on a terminal, so pipes, scripts and `--json` consumers never see it.
+The footer ends with how long the run took, split into local git work and
+GitHub lookups.
 
 ## Usage
 
@@ -232,7 +238,8 @@ $ kite --no-pr --json grafana
   ],
   "reviewQueue": [],
   "prLookupFailed": 0,
-  "ghMissing": false
+  "ghMissing": false,
+  "timing": { "totalMs": 1412, "gitMs": 312, "githubMs": 1100 }
 }
 ```
 

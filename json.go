@@ -15,6 +15,13 @@ type jsonStatus struct {
 	Updates        []jsonUpdate `json:"updates,omitempty"`
 	PRLookupFailed int          `json:"prLookupFailed"`
 	GHMissing      bool         `json:"ghMissing"`
+	Timing         *jsonTiming  `json:"timing,omitempty"`
+}
+
+type jsonTiming struct {
+	TotalMs  int64 `json:"totalMs"`
+	GitMs    int64 `json:"gitMs"`
+	GitHubMs int64 `json:"githubMs"`
 }
 
 type jsonRepo struct {

@@ -49,7 +49,8 @@ rather than guessing when more than one repo matches.
   `stash`, `prune` and `update` lines come once per repo, so a blank STASH on a worktree row
   isn't zero.
 - The footer says how stale the last fetch is. `status` never fetches, so run `kite update` first
-  when freshness matters.
+  when freshness matters. It ends with the run time split into git and GitHub, and `--json`
+  carries the same numbers under `timing`.
 
 ## Safety
 
