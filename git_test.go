@@ -2514,6 +2514,7 @@ func TestUsageDocumentsEverySymbol(t *testing.T) {
 		pruneMerged, prunePR, pruneUnsure, pruneCurrent, pruneErr,
 		"would remove worktree and delete", "needs --force",
 		"pr.failing", "worktreeOf", "rewritten", "timing",
+		"+N", "repos", "otherPRs", "resolved", "fetchedAt", "behindMain", "conflicts", "detached",
 	}
 	for _, w := range want {
 		if !strings.Contains(usage, w) {
