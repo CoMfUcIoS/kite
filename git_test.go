@@ -779,6 +779,9 @@ func TestStashList(t *testing.T) {
 	if got[0].Age == "" {
 		t.Error("Age is empty")
 	}
+	if d := time.Since(got[0].Created); d < 0 || d > time.Minute {
+		t.Errorf("Created = %v, want within a minute of now", got[0].Created)
+	}
 	if got[0].Repo != "work" {
 		t.Errorf("Repo = %q, want work", got[0].Repo)
 	}
@@ -2231,6 +2234,10 @@ func TestStashJSON(t *testing.T) {
 		!strings.Contains(s["subject"].(string), "keep this <for> later") {
 		t.Errorf("stash = %v", s)
 	}
+	created, _ := s["createdAt"].(string)
+	if c, err := time.Parse(time.RFC3339, created); err != nil || time.Since(c) > time.Minute {
+		t.Errorf("createdAt = %v, want a recent RFC 3339 time", s["createdAt"])
+	}
 
 	if empty := roundTrip(t, stashJSON(nil)).([]any); len(empty) != 0 {
 		t.Errorf("no stashes = %v, want []", empty)
@@ -2515,6 +2522,7 @@ func TestUsageDocumentsEverySymbol(t *testing.T) {
 		"would remove worktree and delete", "needs --force",
 		"pr.failing", "worktreeOf", "rewritten", "timing",
 		"+N", "repos", "otherPRs", "resolved", "fetchedAt", "behindMain", "conflicts", "detached",
+		"createdAt",
 	}
 	for _, w := range want {
 		if !strings.Contains(usage, w) {

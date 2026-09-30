@@ -759,6 +759,7 @@ type Stash struct {
 	Repo    string
 	Ref     string
 	Age     string
+	Created time.Time
 	Subject string
 }
 
@@ -784,20 +785,22 @@ func stashList(r Repo) []Stash {
 	}
 	// NUL separators: a stash subject is a commit message and can contain
 	// anything printable, including whatever delimiter looked safe.
-	out, err := git(r.Path, "stash", "list", "--format=%gd%x00%cr%x00%s")
+	out, err := git(r.Path, "stash", "list", "--format=%gd%x00%cr%x00%ct%x00%s")
 	if err != nil || out == "" {
 		return nil
 	}
 
 	var stashes []Stash
 	for _, line := range strings.Split(out, "\n") {
-		fields := strings.Split(line, "\x00")
-		if len(fields) < 3 {
+		fields := strings.SplitN(line, "\x00", 4)
+		if len(fields) < 4 {
 			continue
 		}
-		stashes = append(stashes, Stash{
-			Repo: r.Name, Ref: fields[0], Age: fields[1], Subject: fields[2],
-		})
+		s := Stash{Repo: r.Name, Ref: fields[0], Age: fields[1], Subject: fields[3]}
+		if sec, err := strconv.ParseInt(fields[2], 10, 64); err == nil {
+			s.Created = time.Unix(sec, 0)
+		}
+		stashes = append(stashes, s)
 	}
 	return stashes
 }

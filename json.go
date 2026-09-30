@@ -85,10 +85,11 @@ type jsonUpdate struct {
 }
 
 type jsonStash struct {
-	Repo    string `json:"repo"`
-	Ref     string `json:"ref"`
-	Age     string `json:"age"`
-	Subject string `json:"subject"`
+	Repo      string    `json:"repo"`
+	Ref       string    `json:"ref"`
+	Age       string    `json:"age"`
+	CreatedAt time.Time `json:"createdAt,omitzero"`
+	Subject   string    `json:"subject"`
 }
 
 type jsonPrune struct {
@@ -167,7 +168,7 @@ func stashJSON(stashes []Stash) []jsonStash {
 	sortStashes(stashes)
 	out := make([]jsonStash, 0, len(stashes))
 	for _, s := range stashes {
-		out = append(out, jsonStash{Repo: s.Repo, Ref: s.Ref, Age: s.Age, Subject: s.Subject})
+		out = append(out, jsonStash{Repo: s.Repo, Ref: s.Ref, Age: s.Age, CreatedAt: s.Created, Subject: s.Subject})
 	}
 	return out
 }

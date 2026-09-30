@@ -71,6 +71,7 @@ reading the table:
                 resolved is false when kite can't find the branch here or
                 doesn't know the default branch, so its counts are unknown
   fetchedAt     when this checkout last fetched
+  createdAt     when the stash was made; age gives the same moment in words
   pr.ci         pass, fail, pending, or "" with no checks
   pr.review     approved, changes, required, draft, or ""
   pr.failing    the first failing check, present only when ci is fail
