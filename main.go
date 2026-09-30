@@ -105,6 +105,10 @@ func main() {
 		}
 		return
 	}
+	var search func() []ghSearchPR
+	if !o.noPR && (o.cmd == "status" || o.cmd == "update") && ghAvailable() {
+		search = startSearch(searchReviews)
+	}
 	paths = withWorktrees(paths)
 
 	// Only status and update render the conflict marker; prune and stash
@@ -153,7 +157,7 @@ func main() {
 	ghMissing, failed := false, 0
 	if !o.noPR {
 		var ghFound bool
-		ghFound, queue = attachAll(repos)
+		ghFound, queue = attachAll(repos, search)
 		ghMissing, failed = !ghFound, countPRErrs(repos)
 	}
 	if o.json {

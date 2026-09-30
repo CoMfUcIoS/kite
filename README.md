@@ -270,6 +270,12 @@ but default branches, the columns are left out entirely rather than shown empty.
 `status` never hits the network for git, so `↑↓` and `vs MAIN` are only as fresh
 as your last fetch. The footer says how stale that is. `update` refreshes it.
 
+kite turns on git's untracked cache for its own `status` calls, which makes a
+large repo's `DIRTY` count several times faster to work out. The cache trusts
+directory mtimes, so on a filesystem that doesn't keep those up to date, such as
+some network mounts, a new untracked file can go uncounted until its directory
+changes again.
+
 ## Branches you aren't standing on
 
 A repo can sit on `main` and still have your PR open on a branch you switched

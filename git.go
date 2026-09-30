@@ -312,7 +312,10 @@ func collect(path string, withConflicts bool) Repo {
 		r.Linked = true
 	}
 
-	if s, err := git(path, "status", "--porcelain"); err == nil {
+	// The untracked cache lives in the index and spares status a full walk
+	// for untracked files, which dominated its cost. It trusts directory
+	// mtimes, as git does wherever the cache is enabled.
+	if s, err := git(path, "-c", "core.untrackedCache=true", "status", "--porcelain"); err == nil {
 		r.Dirty = countLines(s)
 	}
 
