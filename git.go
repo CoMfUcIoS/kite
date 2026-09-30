@@ -76,6 +76,10 @@ type Repo struct {
 	// conflict. Local data, so it survives --no-pr.
 	Conflicts bool
 
+	// Rewritten means the branch diverges from its upstream only because the
+	// upstream was force-pushed: the local tip is an old upstream value.
+	Rewritten bool
+
 	// Linked worktrees share one git dir, and with it branches, stashes and
 	// PRs. CommonDir is that dir, empty when git can't say. Only a group's
 	// leader reads repo-wide data, and a zero-value Repo is its own leader.
@@ -316,6 +320,9 @@ func collect(path string, withConflicts bool) Repo {
 	// worth surfacing, it just means nothing to compare against.
 	if s, err := git(path, "rev-list", "--left-right", "--count", "@{upstream}...HEAD"); err == nil {
 		fmt.Sscan(s, &r.Behind, &r.Ahead)
+		if r.Ahead > 0 && r.Behind > 0 {
+			r.Rewritten = upstreamRewritten(path)
+		}
 	} else {
 		r.NoUpstream = true
 	}
@@ -356,6 +363,19 @@ func collect(path string, withConflicts bool) Repo {
 	sort.Strings(r.LocalBranches)
 
 	return r
+}
+
+// upstreamRewritten reports whether HEAD is reachable from an earlier value of
+// its upstream. The reflog message is no help: a force-push made from another
+// worktree logs as a plain "update by push".
+func upstreamRewritten(path string) bool {
+	old, err := git(path, "rev-list", "-g", "--max-count=100", "@{upstream}")
+	if err != nil || old == "" {
+		return false
+	}
+	args := append([]string{"rev-list", "--count", "HEAD", "--not"}, strings.Fields(old)...)
+	n, err := git(path, args...)
+	return err == nil && n == "0"
 }
 
 func gitDir(path string) string {

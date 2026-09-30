@@ -30,6 +30,7 @@ type jsonRepo struct {
 	NoUpstream bool   `json:"noUpstream"`
 	BehindMain int    `json:"behindMain"`
 	Conflicts  bool   `json:"conflicts"`
+	Rewritten  bool   `json:"rewritten"`
 	// Nil on a follower: the stash stack is shared, so only the leader counts it.
 	Stashes    *int        `json:"stashes,omitempty"`
 	LastCommit time.Time   `json:"lastCommit,omitzero"`
@@ -115,7 +116,7 @@ func statusJSON(repos []Repo, queue []ReviewReq, updates []Result, prLookupFaile
 			Name: r.Name, Path: r.Path, Where: r.Where,
 			Branch: r.Branch, Default: r.Default, Detached: r.Detached,
 			Dirty: r.Dirty, Ahead: r.Ahead, Behind: r.Behind, NoUpstream: r.NoUpstream,
-			BehindMain: r.BehindMain, Conflicts: r.Conflicts,
+			BehindMain: r.BehindMain, Conflicts: r.Conflicts, Rewritten: r.Rewritten,
 			LastCommit: r.LastCommit, FetchedAt: r.FetchedAt,
 		}
 		if r.Follower {
