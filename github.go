@@ -381,10 +381,10 @@ func reviewQueueArgs() []string {
 	}
 }
 
-// reviewQueue asks GitHub once for every PR awaiting your review. gh search
+// searchReviews asks GitHub once for every PR awaiting your review. gh search
 // cannot carry headRefName, reviewDecision or statusCheckRollup, which is why
 // the per-repo lookups exist separately rather than folding into this call.
-func reviewQueue(names map[string]string) []ReviewReq {
+func searchReviews() []ghSearchPR {
 	ctx, cancel := context.WithTimeout(context.Background(), prTimeout)
 	defer cancel()
 
@@ -397,16 +397,35 @@ func reviewQueue(names map[string]string) []ReviewReq {
 	if json.Unmarshal(out, &list) != nil {
 		return nil
 	}
-	return pickQueue(list, names)
+	return list
 }
 
-// attachAll runs the per-repo lookups and the review search together, so the
-// search costs no wall clock on top of the lookups.
-func attachAll(repos []Repo) (bool, []ReviewReq) {
+// startSearch runs search in the background and returns a wait for its
+// result. The review search is the slowest single call and needs no local
+// data, so main starts it before the local scan. Call wait at most once.
+func startSearch(search func() []ghSearchPR) (wait func() []ghSearchPR) {
+	ch := make(chan []ghSearchPR, 1)
+	go func() { ch <- search() }()
+	return func() []ghSearchPR { return <-ch }
+}
+
+// queueFrom picks the review queue out of a search already in flight, or
+// gives none when there isn't one.
+func queueFrom(wait func() []ghSearchPR) func(map[string]string) []ReviewReq {
+	return func(names map[string]string) []ReviewReq {
+		if wait == nil {
+			return nil
+		}
+		return pickQueue(wait(), names)
+	}
+}
+
+// attachAll runs the per-repo lookups while the review search finishes.
+func attachAll(repos []Repo, search func() []ghSearchPR) (bool, []ReviewReq) {
 	if !ghAvailable() {
 		return false, nil
 	}
-	return true, runQueueAndPRs(repos, repoNames(repos), reviewQueue)
+	return true, runQueueAndPRs(repos, repoNames(repos), queueFrom(search))
 }
 
 // runQueueAndPRs runs queueFn concurrently with attachPRs. names must be built

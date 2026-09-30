@@ -2383,3 +2383,39 @@ func TestMergedPRsArgs(t *testing.T) {
 		}
 	}
 }
+
+func TestQueueFromPicksAnEarlySearch(t *testing.T) {
+	search := func() []ghSearchPR {
+		p := ghSearchPR{Number: 3, Title: "fix"}
+		p.Repository.Name = "App"
+		return []ghSearchPR{p}
+	}
+	got := queueFrom(search)(map[string]string{"app": "app"})
+	if len(got) != 1 || got[0].Repo != "app" || got[0].Number != 3 {
+		t.Errorf("queue = %+v, want #3 in app", got)
+	}
+	if q := queueFrom(nil)(map[string]string{"app": "app"}); q != nil {
+		t.Errorf("no search in flight must give no queue, got %+v", q)
+	}
+}
+
+func TestStartReviewSearchHandsBackItsResult(t *testing.T) {
+	wait := startSearch(func() []ghSearchPR { return []ghSearchPR{{Number: 1}} })
+	if got := wait(); len(got) != 1 || got[0].Number != 1 {
+		t.Errorf("got %+v, want the search result", got)
+	}
+}
+
+func TestCollectCountsUntrackedWithCacheOn(t *testing.T) {
+	_, clone := workspace(t)
+	writeFile(t, clone, "new.txt", "new")
+	for i := range 2 { // the second run reads the cache the first one wrote
+		if r := collect(clone, false); r.Dirty != 1 {
+			t.Errorf("run %d: Dirty = %d, want the untracked file counted", i+1, r.Dirty)
+		}
+	}
+	writeFile(t, clone, "another.txt", "x")
+	if r := collect(clone, false); r.Dirty != 2 {
+		t.Errorf("Dirty = %d after adding a file, want 2: the cache must not go stale", r.Dirty)
+	}
+}
