@@ -54,6 +54,9 @@ rather than guessing when more than one repo matches.
   it's safe with uncommitted work. A diverged `main` is reported and skipped.
 - `kite prune` changes nothing without `--delete`. `--force` also deletes branches whose upstream
   is gone with no merged PR found, which may be the only copy of that work.
+- `would remove worktree and delete` means `--delete` also removes that linked worktree's
+  directory. kite only offers it for a clean worktree (nothing modified, untracked or ignored)
+  whose remote branch is gone. Say so when you show the user the list.
 - "Clean up my branches" means: run `kite prune`, show the user the dry-run list, and ask. Run
   `--delete` or `--force` only after they say yes to that list.
 
