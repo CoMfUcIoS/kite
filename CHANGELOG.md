@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/CoMfUcIoS/kite/compare/v0.6.0...v0.7.0) (2026-09-30)
+
+
+### Features
+
+* find squash-merged branches whose remote branch was kept ([#12](https://github.com/CoMfUcIoS/kite/issues/12)) ([16c9c30](https://github.com/CoMfUcIoS/kite/commit/16c9c3001f441906e239c662c1666a86e3bab7b8))
+
 ## [0.6.0](https://github.com/CoMfUcIoS/kite/compare/v0.5.0...v0.6.0) (2026-09-30)
 
 
