@@ -218,6 +218,7 @@ $ kite --no-pr --json grafana
       "noUpstream": false,
       "behindMain": 4,
       "conflicts": false,
+      "rewritten": false,
       "stashes": 1,
       "lastCommit": "2026-03-02T09:14:05Z",
       "fetchedAt": "2026-03-02T08:40:11Z"
@@ -248,7 +249,7 @@ since it already prints nothing but a path.
 | Column      | Meaning                                                                                                                                                                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `DIRTY`     | modified plus untracked files                                                                                                                                                                                                                                            |
-| `↑↓`        | commits ahead of and behind the branch's own upstream; `·` when there's nothing to compare against — no upstream configured, the upstream is `[gone]`, or (on a sub-row) the branch never resolved to anything                                                           |
+| `↑↓`        | commits ahead of and behind the branch's own upstream; `·` when there's nothing to compare against — no upstream configured, the upstream is `[gone]`, or (on a sub-row) the branch never resolved to anything; `rewritten` when the upstream was force-pushed and the local branch is just its old version, so pushing would undo the rewrite                                                           |
 | `vs MAIN`   | commits this branch is behind `origin/main` as of the last fetch; a trailing `!` means merging `main` in would conflict. Blank, not `-`, when kite can't resolve the branch to a ref or doesn't know the default branch — `-` means level with main, blank means unknown |
 | `STASH`     | stashes sitting in the repo                                                                                                                                                                                                                                              |
 | `LAST`      | age of the newest commit                                                                                                                                                                                                                                                 |

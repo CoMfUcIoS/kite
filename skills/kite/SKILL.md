@@ -37,6 +37,8 @@ rather than guessing when more than one repo matches.
 
 - `DIRTY` is modified plus untracked files. `STASH` is the stash count.
 - `↑↓` is ahead/behind the branch's own upstream. `·` means there's nothing to compare against.
+  `rewritten` means someone force-pushed the upstream and the local branch is its old version.
+  Don't push it: reset to the upstream, or remove the worktree.
 - `vs MAIN` is how far behind `origin/<default>` the branch is. A trailing `!` means merging main
   would conflict. `-` means level with main. Blank means unknown.
 - `PR`, `RV` and `CI` show only when there's data. RV: `✓` approved, `✗` changes requested,

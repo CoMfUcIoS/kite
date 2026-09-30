@@ -553,8 +553,11 @@ func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
 		if k := groupKey(r); r.FetchedAt.After(newestFetch[k]) {
 			newestFetch[k] = r.FetchedAt
 		}
-		addRow(txt(repoLabel(repos, i)), r.branchCell(), r.dirtyCell(),
-			upstreamCell(r.Ahead, r.Behind, r.NoUpstream),
+		up := upstreamCell(r.Ahead, r.Behind, r.NoUpstream)
+		if r.Rewritten {
+			up = hue(yellow, "rewritten")
+		}
+		addRow(txt(repoLabel(repos, i)), r.branchCell(), r.dirtyCell(), up,
 			behindMainCell(r.BehindMain, r.Conflicts),
 			r.stashCell(), r.LastCommit, r.PR)
 

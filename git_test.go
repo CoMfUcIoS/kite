@@ -2237,3 +2237,71 @@ func TestPruneJSONDryRun(t *testing.T) {
 		}
 	}
 }
+
+// rewrittenFixture pushes feat from clone, then amends and force-pushes it
+// from a second clone, and fetches so clone sees the rewrite.
+func rewrittenFixture(t *testing.T) (clone string) {
+	t.Helper()
+	origin, clone := workspace(t)
+	mustGit(t, clone, "switch", "-qc", "feat")
+	writeFile(t, clone, "feat.txt", "v1")
+	mustGit(t, clone, "add", ".")
+	mustGit(t, clone, "commit", "-qm", "feat v1")
+	mustGit(t, clone, "push", "-q", "-u", "origin", "feat")
+
+	other := filepath.Join(t.TempDir(), "other")
+	mustGit(t, filepath.Dir(other), "clone", "-q", "-b", "feat", origin, other)
+	writeFile(t, other, "feat.txt", "v2")
+	mustGit(t, other, "commit", "-qam", "feat v2", "--amend")
+	mustGit(t, other, "push", "-q", "--force", "origin", "feat")
+
+	mustGit(t, clone, "fetch", "-q", "origin")
+	return clone
+}
+
+func TestCollectFlagsRewrittenUpstream(t *testing.T) {
+	r := collect(rewrittenFixture(t), false)
+	if r.Ahead != 1 || r.Behind != 1 || !r.Rewritten {
+		t.Errorf("↑%d↓%d Rewritten=%v, want ↑1↓1 rewritten", r.Ahead, r.Behind, r.Rewritten)
+	}
+}
+
+func TestCollectNewWorkOnRewrittenBranchIsNotRewritten(t *testing.T) {
+	clone := rewrittenFixture(t)
+	writeFile(t, clone, "more.txt", "more")
+	mustGit(t, clone, "add", ".")
+	mustGit(t, clone, "commit", "-qm", "never pushed")
+
+	if r := collect(clone, false); r.Rewritten {
+		t.Errorf("↑%d↓%d Rewritten=true, want the unpushed commit to keep the counts", r.Ahead, r.Behind)
+	}
+}
+
+func TestCollectPlainDivergenceIsNotRewritten(t *testing.T) {
+	origin, clone := workspace(t)
+	writeFile(t, clone, "local.txt", "local")
+	mustGit(t, clone, "add", ".")
+	mustGit(t, clone, "commit", "-qm", "local")
+	addRemoteCommit(t, origin, "two.txt")
+	mustGit(t, clone, "fetch", "-q", "origin")
+
+	if r := collect(clone, false); r.Ahead != 1 || r.Behind != 1 || r.Rewritten {
+		t.Errorf("↑%d↓%d Rewritten=%v, want ↑1↓1 not rewritten", r.Ahead, r.Behind, r.Rewritten)
+	}
+}
+
+func TestPrintTableShowsRewritten(t *testing.T) {
+	repos := []Repo{{Name: "app", Branch: "feat", Default: "main", Ahead: 1, Behind: 1, Rewritten: true}}
+	var buf bytes.Buffer
+	printTable(&buf, repos, false, "")
+	if out := stripANSI(buf.String()); !strings.Contains(out, "rewritten") || strings.Contains(out, "↑1↓1") {
+		t.Errorf("a rewritten upstream should replace the counts:\n%s", out)
+	}
+}
+
+func TestStatusJSONCarriesRewritten(t *testing.T) {
+	got := statusJSON([]Repo{{Name: "app", Rewritten: true}}, nil, nil, 0, false)
+	if !got.Repos[0].Rewritten {
+		t.Error("rewritten missing from the JSON row")
+	}
+}
