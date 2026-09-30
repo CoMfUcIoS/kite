@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/CoMfUcIoS/kite/compare/v0.10.0...v0.11.0) (2026-09-30)
+
+
+### Features
+
+* page long output through less, like git ([#26](https://github.com/CoMfUcIoS/kite/issues/26)) ([0b3f7ca](https://github.com/CoMfUcIoS/kite/commit/0b3f7ca392a5844d922266370b2e0a7fc4d71d31))
+
 ## [0.10.0](https://github.com/CoMfUcIoS/kite/compare/v0.9.1...v0.10.0) (2026-09-30)
 
 
