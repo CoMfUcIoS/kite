@@ -1690,6 +1690,7 @@ func TestStaleBranchCheckedOutInSiblingIsCurrent(t *testing.T) {
 	mustGit(t, wt, "commit", "-qm", "gone work")
 	mustGit(t, wt, "push", "-q", "-u", "origin", "gone-branch")
 	mustGit(t, wt, "push", "-q", "origin", "--delete", "gone-branch")
+	writeFile(t, wt, "wip.txt", "wip") // a clean sibling would be removable
 
 	var b Branch
 	for _, got := range staleBranches(collect(clone, false)) {
@@ -1927,5 +1928,128 @@ func TestPrintTableFooterCountsWorktreesApart(t *testing.T) {
 	printTable(&buf, repos, false, "")
 	if out := stripANSI(buf.String()); !strings.Contains(out, "2 repos · 2 worktrees") {
 		t.Errorf("footer should count repos and worktrees apart:\n%s", out)
+	}
+}
+
+// pruneOne returns the stale entry for name, as seen from the main checkout.
+func pruneOne(t *testing.T, clone, name string) Branch {
+	t.Helper()
+	for _, b := range staleBranches(collect(clone, false)) {
+		if b.Name == name {
+			return b
+		}
+	}
+	t.Fatalf("%s not listed as stale", name)
+	return Branch{}
+}
+
+// finishedWorktree is a worktree whose branch was merged and whose remote
+// branch was then deleted, the state a merged pull request leaves behind.
+func finishedWorktree(t *testing.T, clone, branch string) string {
+	t.Helper()
+	wt := outsideWorktree(t, clone, branch)
+	mustGit(t, wt, "push", "-q", "-u", "origin", branch)
+	mustGit(t, wt, "push", "-q", "origin", "--delete", branch)
+	return wt
+}
+
+func TestPruneRemovesCleanMergedWorktree(t *testing.T) {
+	_, clone := workspace(t)
+	wt := finishedWorktree(t, clone, "done")
+
+	b := pruneOne(t, clone, "done")
+	if b.Current || b.Worktree == "" {
+		t.Fatalf("Current=%v Worktree=%q, want a removable worktree", b.Current, b.Worktree)
+	}
+	if !b.deletable(false) {
+		t.Error("a merged branch in a clean worktree must be deletable without force")
+	}
+	if err := deleteBranch(b); err != nil {
+		t.Fatalf("deleteBranch: %v", err)
+	}
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Errorf("worktree directory survived: %v", err)
+	}
+	if out := mustGit(t, clone, "branch", "--list", "done"); out != "" {
+		t.Errorf("branch survived: %q", out)
+	}
+}
+
+func TestPruneKeepsFreshWorktree(t *testing.T) {
+	_, clone := workspace(t)
+	outsideWorktree(t, clone, "just-started") // at main, so merged, but never pushed
+
+	b := pruneOne(t, clone, "just-started")
+	if !b.Current || b.Worktree != "" {
+		t.Errorf("Current=%v Worktree=%q, want a worktree nobody has worked in yet left alone", b.Current, b.Worktree)
+	}
+}
+
+func TestPruneKeepsWorktreeWithIgnoredFiles(t *testing.T) {
+	_, clone := workspace(t)
+	wt := finishedWorktree(t, clone, "done")
+	writeFile(t, wt, ".gitignore", ".env")
+	mustGit(t, wt, "add", ".gitignore")
+	mustGit(t, wt, "commit", "-qm", "ignore env")
+	mustGit(t, wt, "push", "-q", "origin", "HEAD:main")
+	writeFile(t, wt, ".env", "SECRET=1")
+
+	b := pruneOne(t, clone, "done")
+	if !b.Current || b.Worktree != "" {
+		t.Errorf("Current=%v Worktree=%q, want a worktree holding ignored files left alone", b.Current, b.Worktree)
+	}
+}
+
+func TestPruneKeepsDirtyWorktree(t *testing.T) {
+	_, clone := workspace(t)
+	wt := finishedWorktree(t, clone, "done")
+	writeFile(t, wt, "wip.txt", "wip")
+
+	b := pruneOne(t, clone, "done")
+	if !b.Current || b.Worktree != "" {
+		t.Errorf("Current=%v Worktree=%q, want a dirty worktree left alone", b.Current, b.Worktree)
+	}
+	if b.deletable(true) {
+		t.Error("a dirty worktree's branch must never be deletable")
+	}
+}
+
+func TestPruneKeepsBranchInMainCheckout(t *testing.T) {
+	_, clone := workspace(t)
+	mustGit(t, clone, "switch", "-qc", "done")
+	other := addWorktree(t, clone, "leader")
+
+	for _, b := range staleBranches(collect(other, false)) {
+		if b.Name == "done" && (!b.Current || b.Worktree != "") {
+			t.Errorf("Current=%v Worktree=%q, want the main checkout never removed", b.Current, b.Worktree)
+		}
+	}
+}
+
+func TestPruneGoneWorktreeNeedsForce(t *testing.T) {
+	_, clone := workspace(t)
+	wt := outsideWorktree(t, clone, "squashed")
+	writeFile(t, wt, "s.txt", "s")
+	mustGit(t, wt, "add", ".")
+	mustGit(t, wt, "commit", "-qm", "squashed work")
+	mustGit(t, wt, "push", "-q", "-u", "origin", "squashed")
+	mustGit(t, wt, "push", "-q", "origin", "--delete", "squashed")
+
+	b := pruneOne(t, clone, "squashed")
+	if b.Worktree == "" {
+		t.Fatalf("Worktree empty, want the clean worktree offered")
+	}
+	if b.deletable(false) || !b.deletable(true) {
+		t.Errorf("deletable = %v/%v, want an unconfirmed merge to need --force", b.deletable(false), b.deletable(true))
+	}
+}
+
+func TestPrintPruneNamesTheWorktree(t *testing.T) {
+	branches := []Branch{{Repo: "app", Name: "done", Default: "main", Merged: true, Worktree: "/w/app-done", CheckedOutIn: "app-done"}}
+	var buf bytes.Buffer
+	printPrune(&buf, branches, false, false)
+	out := stripANSI(buf.String())
+	if !strings.Contains(out, "merged into main, worktree app-done") || !strings.Contains(out, "would remove worktree and delete") {
+		t.Errorf("prune should say the worktree goes too:\n%s", out)
 	}
 }

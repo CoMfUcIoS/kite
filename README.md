@@ -127,6 +127,14 @@ A branch checked out in any worktree of the repo is never deleted, not even with
 `--force`, because removing it would mean switching away and kite never switches
 branches.
 
+There's one exception, for the worktree-per-PR workflow. Once a PR merges and its
+remote branch is deleted, the branch's linked worktree is dead weight. If that
+worktree is clean, with nothing modified, untracked or ignored, prune offers to
+remove it (`would remove worktree and delete`) and `--delete` runs
+`git worktree remove` before deleting the branch. The same tiers apply, so an
+unconfirmed merge still needs `--force`. The main checkout is never removed, and
+neither is a worktree you haven't pushed from yet.
+
 ## Finding forgotten work
 
 ```

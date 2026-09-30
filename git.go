@@ -495,7 +495,10 @@ type Branch struct {
 	PRNumber int  // a merged PR for this branch, 0 when none or unknown
 	Current  bool // checked out in some worktree, so it cannot be deleted without switching
 
-	CheckedOutIn string // directory name of the worktree holding it, when Current
+	CheckedOutIn string // directory name of the worktree holding it
+	// Worktree is a clean linked worktree holding the branch, which deleting
+	// the branch removes first. Set instead of Current.
+	Worktree string
 
 	Err error
 }
@@ -603,8 +606,15 @@ func staleBranches(r Repo) []Branch {
 		}
 		// %(worktreepath) is set when any worktree of the repo has the
 		// branch checked out, not only this one.
-		if fields[2] != "" {
-			b.Current, b.CheckedOutIn = true, filepath.Base(fields[2])
+		if wt := fields[2]; wt != "" {
+			b.CheckedOutIn = filepath.Base(wt)
+			// Gone, not just merged: a worktree freshly branched from main
+			// also reads as merged, before any work has started in it.
+			if b.Gone && removableWorktree(wt, r.Path) {
+				b.Worktree = wt
+			} else {
+				b.Current = true
+			}
 		}
 		// A squash merge leaves no ancestry, which is exactly why the Gone
 		// check above carries most of the weight.
@@ -618,7 +628,28 @@ func staleBranches(r Repo) []Branch {
 	return branches
 }
 
+// removableWorktree is a linked worktree other than the one kite runs git
+// from, with nothing uncommitted and nothing ignored: git worktree remove
+// deletes ignored files, a local .env included. The main checkout never
+// qualifies.
+func removableWorktree(wt, from string) bool {
+	if realPath(wt) == realPath(from) {
+		return false
+	}
+	if fi, err := os.Stat(filepath.Join(wt, ".git")); err != nil || fi.IsDir() {
+		return false
+	}
+	s, err := git(wt, "status", "--porcelain", "--ignored")
+	return err == nil && s == ""
+}
+
 func deleteBranch(b Branch) error {
+	if b.Worktree != "" {
+		// No --force: git refuses a tree that got dirty since it was listed.
+		if _, err := git(b.Path, "worktree", "remove", b.Worktree); err != nil {
+			return err
+		}
+	}
 	// Ancestry-merged branches go through -d so git double-checks us. The rest
 	// need -D, because a squash merge leaves nothing for -d to verify.
 	flag := "-D"

@@ -827,6 +827,9 @@ func printPrune(w io.Writer, branches []Branch, doDelete, force bool) {
 		default:
 			reason = hue(yellow, "upstream gone, merge unconfirmed")
 		}
+		if b.Worktree != "" {
+			reason.text += ", worktree " + b.CheckedOutIn
+		}
 
 		switch {
 		case b.verdict() == pruneCurrent:
@@ -835,6 +838,9 @@ func printPrune(w io.Writer, branches []Branch, doDelete, force bool) {
 		case !b.deletable(force):
 			action = hue(yellow, "needs --force")
 			blocked++
+		case !doDelete && b.Worktree != "":
+			action = hue(cyan, "would remove worktree and delete")
+			wouldDelete++
 		case !doDelete:
 			action = hue(cyan, "would delete")
 			wouldDelete++
