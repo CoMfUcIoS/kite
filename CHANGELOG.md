@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/CoMfUcIoS/kite/compare/v0.9.0...v0.9.1) (2026-09-30)
+
+
+### Bug Fixes
+
+* explain the --json shape and the CI +N suffix in --help ([#21](https://github.com/CoMfUcIoS/kite/issues/21)) ([16fb522](https://github.com/CoMfUcIoS/kite/commit/16fb522ee4750fd3dd189bbf9e4fa9464157f48d))
+
 ## [0.9.0](https://github.com/CoMfUcIoS/kite/compare/v0.8.0...v0.9.0) (2026-09-30)
 
 
