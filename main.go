@@ -36,6 +36,8 @@ flags:
   --no-pr                  skip the GitHub lookups
   --delete                 prune only: actually delete the branches
   --force                  prune only: also delete branches whose merge is unconfirmed
+  --json                   one JSON document on stdout instead of the table, for
+                           status, update, stash and prune (not path)
   --version                print the version
   -h, --help               this text
 
@@ -51,6 +53,7 @@ type opts struct {
 	noPR   bool
 	delete bool
 	force  bool
+	json   bool
 }
 
 var commands = []string{"status", "update", "prune", "stash", "path"}
@@ -118,31 +121,50 @@ func main() {
 	markLeaders(repos)
 	locate(repos, root)
 
+	var updates []Result
 	switch o.cmd {
 	case "prune":
-		printPrune(os.Stdout, staleBranchesAll(repos, !o.noPR), o.delete, o.force)
+		rows := runPrune(staleBranchesAll(repos, !o.noPR), o.delete, o.force)
+		if o.json {
+			writeJSON(os.Stdout, pruneJSON(rows))
+		} else {
+			printPrune(os.Stdout, rows, o.delete)
+		}
 		return
 	case "stash":
-		printStashes(os.Stdout, stashesAll(repos))
+		if o.json {
+			writeJSON(os.Stdout, stashJSON(stashesAll(repos)))
+		} else {
+			printStashes(os.Stdout, stashesAll(repos))
+		}
 		return
 	case "update":
-		printUpdates(os.Stdout, updateAll(repos))
-		fmt.Println()
+		updates = updateAll(repos)
+		if !o.json {
+			printUpdates(os.Stdout, updates)
+			fmt.Println()
+		}
 		repos = collectAll(pathsOf(repos), withConflicts)
 		markLeaders(repos)
 		locate(repos, root)
 	}
 
-	note := ""
 	var queue []ReviewReq
+	ghMissing, failed := false, 0
 	if !o.noPR {
 		var ghFound bool
 		ghFound, queue = attachAll(repos)
-		if failed := countPRErrs(repos); !ghFound {
-			note = "gh not installed, PR columns hidden"
-		} else if failed > 0 {
-			note = prLookupNote(failed)
-		}
+		ghMissing, failed = !ghFound, countPRErrs(repos)
+	}
+	if o.json {
+		writeJSON(os.Stdout, statusJSON(repos, queue, updates, failed, ghMissing))
+		return
+	}
+	note := ""
+	if ghMissing {
+		note = "gh not installed, PR columns hidden"
+	} else if failed > 0 {
+		note = prLookupNote(failed)
 	}
 	printTable(os.Stdout, repos, o.cmd == "update", note)
 	printReviewQueue(os.Stdout, queue)
@@ -231,6 +253,8 @@ func parseArgs(args []string) (opts, error) {
 			o.delete = true
 		case a == "--force", a == "-force":
 			o.force = true
+		case a == "--json", a == "-json":
+			o.json = true
 		case a == "-h", a == "--help", a == "help":
 			return opts{cmd: "help"}, nil
 		case a == "--version", a == "-version", a == "version":
@@ -258,6 +282,9 @@ func parseArgs(args []string) (opts, error) {
 	}
 	if len(pos) > 0 {
 		o.filter = pos[0]
+	}
+	if o.json && o.cmd == "path" {
+		return o, fmt.Errorf("--json does not apply to path, which already prints a bare path")
 	}
 	return o, nil
 }
@@ -441,8 +468,9 @@ func eachPR(repos []Repo, fn func(*PR)) {
 	}
 }
 
-func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
-	// Linked worktrees sit under their leader even when their names sort apart.
+// sortRepos puts linked worktrees under their leader even when their names
+// sort apart.
+func sortRepos(repos []Repo) {
 	sort.Slice(repos, func(i, j int) bool {
 		a, b := repos[i], repos[j]
 		if ka, kb := cmp.Or(a.LeaderName, a.Name), cmp.Or(b.LeaderName, b.Name); ka != kb {
@@ -453,6 +481,10 @@ func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
 		}
 		return a.Name < b.Name
 	})
+}
+
+func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
+	sortRepos(repos)
 
 	// A column nobody can fill is a column nobody should read. This covers a
 	// missing gh, an unauthenticated gh, --no-pr, and simply having no open PRs.
@@ -761,8 +793,12 @@ func truncate(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
-func printUpdates(w io.Writer, results []Result) {
+func sortResults(results []Result) {
 	sort.Slice(results, func(i, j int) bool { return results[i].Repo < results[j].Repo })
+}
+
+func printUpdates(w io.Writer, results []Result) {
+	sortResults(results)
 
 	var rows [][]cell
 	for _, res := range results {
@@ -790,7 +826,15 @@ func printUpdates(w io.Writer, results []Result) {
 	renderGrid(w, rows, 2)
 }
 
-func printPrune(w io.Writer, branches []Branch, doDelete, force bool) {
+// pruneRow is one branch with its outcome decided, and with doDelete already
+// carried out, so the table and --json report the same thing.
+type pruneRow struct {
+	Branch
+	reason string
+	action string
+}
+
+func runPrune(branches []Branch, doDelete, force bool) []pruneRow {
 	sort.Slice(branches, func(i, j int) bool {
 		if branches[i].Repo != branches[j].Repo {
 			return branches[i].Repo < branches[j].Repo
@@ -798,7 +842,52 @@ func printPrune(w io.Writer, branches []Branch, doDelete, force bool) {
 		return branches[i].Name < branches[j].Name
 	})
 
-	if len(branches) == 0 {
+	rows := make([]pruneRow, 0, len(branches))
+	for _, b := range branches {
+		if b.Err != nil {
+			rows = append(rows, pruneRow{b, firstLine(b.Err.Error()), "failed"})
+			continue
+		}
+
+		var reason, action string
+		switch b.verdict() {
+		case pruneMerged:
+			reason = "merged into " + b.Default
+		case prunePR:
+			reason = fmt.Sprintf("PR #%d merged", b.PRNumber)
+		case pruneCurrent:
+			reason = "checked out in " + b.CheckedOutIn
+		default:
+			reason = "upstream gone, merge unconfirmed"
+		}
+		if b.Worktree != "" {
+			reason += ", worktree " + b.CheckedOutIn
+		}
+
+		switch {
+		case b.verdict() == pruneCurrent:
+			action = "skipped"
+		case !b.deletable(force):
+			action = "needs --force"
+		case !doDelete && b.Worktree != "":
+			action = "would remove worktree and delete"
+		case !doDelete:
+			action = "would delete"
+		default:
+			if err := deleteBranch(b); err != nil {
+				action = "failed: " + firstLine(err.Error())
+			} else {
+				action = "deleted"
+			}
+		}
+
+		rows = append(rows, pruneRow{b, reason, action})
+	}
+	return rows
+}
+
+func printPrune(w io.Writer, prs []pruneRow, doDelete bool) {
+	if len(prs) == 0 {
 		fmt.Fprintln(w, hue(dim, "No finished branches. Nothing to prune.").String())
 		return
 	}
@@ -806,55 +895,41 @@ func printPrune(w io.Writer, branches []Branch, doDelete, force bool) {
 	var rows [][]cell
 	deleted, wouldDelete, blocked, skipped, failed := 0, 0, 0, 0, 0
 
-	for _, b := range branches {
-		if b.Err != nil {
+	for _, p := range prs {
+		if p.Err != nil {
 			rows = append(rows, []cell{
-				txt(b.Repo), hue(red, "-"),
-				rawCell(hue(red, "error: "+firstLine(b.Err.Error())).String()),
+				txt(p.Repo), hue(red, "-"),
+				rawCell(hue(red, "error: "+p.reason).String()),
 			})
 			failed++
 			continue
 		}
 
-		var reason, action cell
-		switch b.verdict() {
-		case pruneMerged:
-			reason = hue(dim, "merged into "+b.Default)
-		case prunePR:
-			reason = hue(dim, fmt.Sprintf("PR #%d merged", b.PRNumber))
-		case pruneCurrent:
-			reason = hue(dim, "checked out in "+b.CheckedOutIn)
-		default:
-			reason = hue(yellow, "upstream gone, merge unconfirmed")
-		}
-		if b.Worktree != "" {
-			reason.text += ", worktree " + b.CheckedOutIn
+		reason := hue(dim, p.reason)
+		if p.verdict() == pruneUnsure {
+			reason = hue(yellow, p.reason)
 		}
 
-		switch {
-		case b.verdict() == pruneCurrent:
-			action = hue(dim, "skipped")
+		var action cell
+		switch p.action {
+		case "skipped":
+			action = hue(dim, p.action)
 			skipped++
-		case !b.deletable(force):
-			action = hue(yellow, "needs --force")
+		case "needs --force":
+			action = hue(yellow, p.action)
 			blocked++
-		case !doDelete && b.Worktree != "":
-			action = hue(cyan, "would remove worktree and delete")
+		case "would delete", "would remove worktree and delete":
+			action = hue(cyan, p.action)
 			wouldDelete++
-		case !doDelete:
-			action = hue(cyan, "would delete")
-			wouldDelete++
+		case "deleted":
+			action = hue(green, p.action)
+			deleted++
 		default:
-			if err := deleteBranch(b); err != nil {
-				action = hue(red, "failed: "+firstLine(err.Error()))
-				failed++
-			} else {
-				action = hue(green, "deleted")
-				deleted++
-			}
+			action = hue(red, p.action)
+			failed++
 		}
 
-		rows = append(rows, []cell{txt(b.Repo), hue(cyan, b.Name), reason, action})
+		rows = append(rows, []cell{txt(p.Repo), hue(cyan, p.Name), reason, action})
 	}
 	renderGrid(w, rows, 2)
 
@@ -885,17 +960,21 @@ func printPrune(w io.Writer, branches []Branch, doDelete, force bool) {
 	fmt.Fprintln(w, hue(dim, strings.Join(parts, " · ")).String())
 }
 
-func printStashes(w io.Writer, stashes []Stash) {
-	if len(stashes) == 0 {
-		fmt.Fprintln(w, hue(dim, "No stashes anywhere.").String())
-		return
-	}
+func sortStashes(stashes []Stash) {
 	sort.Slice(stashes, func(i, j int) bool {
 		if stashes[i].Repo != stashes[j].Repo {
 			return stashes[i].Repo < stashes[j].Repo
 		}
 		return stashes[i].Ref < stashes[j].Ref
 	})
+}
+
+func printStashes(w io.Writer, stashes []Stash) {
+	if len(stashes) == 0 {
+		fmt.Fprintln(w, hue(dim, "No stashes anywhere.").String())
+		return
+	}
+	sortStashes(stashes)
 
 	rows := [][]cell{{hue(dim, "REPO"), hue(dim, "STASH"), hue(dim, "AGE"), hue(dim, "SUBJECT")}}
 	for _, s := range stashes {

@@ -49,6 +49,7 @@ kite path [filter]       print one repo path, for: cd $(kite path api)
 --no-pr                  skip the GitHub lookups
 --delete                 prune only: actually delete the branches
 --force                  prune only: also delete branches whose merge is unconfirmed
+--json                   one JSON document on stdout instead of the table
 --version                print the version
 -h, --help               usage
 ```
@@ -193,6 +194,54 @@ kite: 2 repos match "agent", be more specific:
         grafana-agent
         prometheus-agent
 ```
+
+## Machine-readable output
+
+Scripts and agents shouldn't scrape a layout meant for people. `--json` works
+on `status`, `update`, `stash` and `prune`, and prints one JSON document with no
+colour and no footer:
+
+```
+$ kite --no-pr --json grafana
+{
+  "repos": [
+    {
+      "name": "grafana",
+      "path": "/home/you/src/grafana",
+      "where": "grafana",
+      "branch": "feat/retry-backoff",
+      "default": "main",
+      "detached": false,
+      "dirty": 2,
+      "ahead": 2,
+      "behind": 0,
+      "noUpstream": false,
+      "behindMain": 4,
+      "conflicts": false,
+      "stashes": 1,
+      "lastCommit": "2026-03-02T09:14:05Z",
+      "fetchedAt": "2026-03-02T08:40:11Z"
+    }
+  ],
+  "reviewQueue": [],
+  "prLookupFailed": 0,
+  "ghMissing": false
+}
+```
+
+Rows come in the same order as the table. A row can also carry `pr` (`number`,
+`review`, `ci`, `failing`, `extraFailing`), `otherPRs` for the indented sub-rows,
+and `error` when kite couldn't read the repo. A worktree row carries
+`worktreeOf`, its main checkout's name, and no `stashes` key, because the count
+lives on the main checkout. Times are RFC 3339 and left out when unknown.
+
+`update --json` prints the same document after updating, plus an `updates`
+array of `{repo, branch, default, status, delta, error}`. `stash --json` is an
+array of `{repo, ref, age, subject}`, and `prune --json` an array of
+`{repo, branch, verdict, reason, action}`, where `action` is `would delete`,
+`would remove worktree and delete`, `deleted`, `needs --force`, `skipped` or
+`failed`. `path` rejects `--json`,
+since it already prints nothing but a path.
 
 ## Columns
 
