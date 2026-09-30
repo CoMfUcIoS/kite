@@ -29,8 +29,7 @@ var prog *progress
 // startProgress returns nil unless stderr is a terminal, so pipes, CI logs
 // and agents never see control codes.
 func startProgress() *progress {
-	fi, err := os.Stderr.Stat()
-	if err != nil || fi.Mode()&os.ModeCharDevice == 0 || os.Getenv("TERM") == "dumb" {
+	if !isTerminal(os.Stderr) || os.Getenv("TERM") == "dumb" {
 		return nil
 	}
 	p := &progress{w: os.Stderr, quit: make(chan struct{})}

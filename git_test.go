@@ -2586,3 +2586,57 @@ func TestFitColumnsCountsRawTrailingCells(t *testing.T) {
 		t.Errorf("a raw last cell must count toward the width, row is %d wide", n)
 	}
 }
+
+func TestPagerCommand(t *testing.T) {
+	for _, c := range []struct {
+		kite, pager *string
+		want        string
+	}{
+		{nil, nil, "less -FRX"},
+		{nil, ptr("less"), "less -FRX"},
+		{nil, ptr("less -S"), "less -S"},
+		{ptr("most -s"), ptr("more"), "most -s"},
+		{nil, ptr("more"), "more"},
+		{ptr(""), ptr("more"), ""},
+		{nil, ptr("cat"), ""},
+		{ptr("cat"), nil, ""},
+	} {
+		env := map[string]string{}
+		if c.kite != nil {
+			env["KITE_PAGER"] = *c.kite
+		}
+		if c.pager != nil {
+			env["PAGER"] = *c.pager
+		}
+		lookup := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+		if got := pagerCommand(lookup); got != c.want {
+			t.Errorf("KITE_PAGER=%v PAGER=%v: pager = %q, want %q", c.kite, c.pager, got, c.want)
+		}
+	}
+}
+
+func ptr(s string) *string { return &s }
+
+func TestPageRunsThePager(t *testing.T) {
+	var out bytes.Buffer
+	if err := page(&out, []byte("hello\n"), "tr a-z A-Z"); err != nil {
+		t.Fatalf("page: %v", err)
+	}
+	if out.String() != "HELLO\n" {
+		t.Errorf("pager output = %q, want the input run through the pager", out.String())
+	}
+}
+
+func TestPageFailsWhenThePagerIsMissing(t *testing.T) {
+	var out bytes.Buffer
+	if err := page(&out, []byte("x"), "definitely-not-a-pager-kite"); err == nil {
+		t.Error("a missing pager must report an error so the caller can fall back")
+	}
+}
+
+func TestParseArgsNoPager(t *testing.T) {
+	o, err := parseArgs([]string{"--no-pager"})
+	if err != nil || !o.noPager {
+		t.Errorf("noPager = %v err = %v, want true", o.noPager, err)
+	}
+}
