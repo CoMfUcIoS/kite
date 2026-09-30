@@ -10,8 +10,8 @@ caddy       main                    -      -   -        -      3h
 etcd        feat/lease-ttl-tuning   6      ↑3  -        1      4d    #204       ○
 grafana     feat/retry-backoff      -      ↑2  -4       -      19h   #4211  ✓   ✓
 prometheus  main                    -      -   -        -      6d
-            └ feat/remote-write-v2  -      -   -14!     -      3h    #591   ✗   ✗ lint +2
-            └ feat/queue-metrics    -      ·            -      1d    #602   ·   ○
+            ↳ feat/remote-write-v2  -      -   -14!     -      3h    #591   ✗   ✗ lint +2
+            ↳ feat/queue-metrics    -      ·            -      1d    #602   ·   ○
 terraform   fix/module-nil-deref    -      ↑1  -31      -      23h   #887   ·   ○
 traefik     release/v3              -      ·   -        -      3w
 vault       chore/bump-deps         -      -   -8       -      4d    #152   ✎
@@ -292,8 +292,8 @@ repo:
 ```
 REPO        BRANCH                  DIRTY  ↑↓  vs MAIN  STASH  LAST  PR     RV  CI
 prometheus  main                    -      -   -        -      6d
-            └ feat/remote-write-v2  -      -   -14!     -      3h    #591   ✗   ✗ lint +2
-            └ feat/queue-metrics    -      ·            -      1d    #602   ·   ○
+            ↳ feat/remote-write-v2  -      -   -14!     -      3h    #591   ✗   ✗ lint +2
+            ↳ feat/queue-metrics    -      ·            -      1d    #602   ·   ○
 ```
 
 `DIRTY` and `STASH` show a dash on those rows, not a count. Both belong to the

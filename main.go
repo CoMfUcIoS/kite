@@ -605,7 +605,7 @@ func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
 			// DIRTY and STASH show a dash rather than a real value on a
 			// sub-row: both belong to the working tree and the repo, not to a
 			// branch nobody checked out.
-			addRow(txt(""), hue(cyan, "└ "+o.Branch), hue(dim, "-"),
+			addRow(txt(""), hue(cyan, "↳ "+o.Branch), hue(dim, "-"),
 				upstreamCell(o.Ahead, o.Behind, o.NoUpstream),
 				subRowMainCell(o),
 				hue(dim, "-"), o.LastCommit, &o.PR)
