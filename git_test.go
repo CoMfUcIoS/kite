@@ -1915,3 +1915,17 @@ func TestPrintTableMarksWorktreeRows(t *testing.T) {
 		}
 	}
 }
+
+func TestPrintTableFooterCountsWorktreesApart(t *testing.T) {
+	repos := []Repo{
+		{Name: "app", LeaderName: "app"},
+		{Name: "app-a", Follower: true, LeaderName: "app"},
+		{Name: "app-b", Follower: true, LeaderName: "app"},
+		{Name: "solo"},
+	}
+	var buf bytes.Buffer
+	printTable(&buf, repos, false, "")
+	if out := stripANSI(buf.String()); !strings.Contains(out, "2 repos · 2 worktrees") {
+		t.Errorf("footer should count repos and worktrees apart:\n%s", out)
+	}
+}

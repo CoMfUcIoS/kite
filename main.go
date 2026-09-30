@@ -552,7 +552,16 @@ func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
 		fmt.Fprintf(w, "%s %s %s\n", hue(red, "✗"), r.Name, hue(red, firstLine(r.Err.Error())))
 	}
 
-	parts := []string{plural(len(repos), "repo")}
+	worktrees := 0
+	for _, r := range repos {
+		if r.Follower {
+			worktrees++
+		}
+	}
+	parts := []string{plural(len(repos)-worktrees, "repo")}
+	if worktrees > 0 {
+		parts = append(parts, plural(worktrees, "worktree"))
+	}
 	if dirty > 0 {
 		parts = append(parts, fmt.Sprintf("%d dirty", dirty))
 	}
