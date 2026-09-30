@@ -16,14 +16,14 @@ Run it from the directory that holds the repos, or pass `--root <dir>`.
 
 ## Quick reference
 
-| Question | Command |
-| --- | --- |
+| Question                                               | Command                     |
+| ------------------------------------------------------ | --------------------------- |
 | What's dirty, stashed, behind, conflicting, in review? | `kite` (or `kite <filter>`) |
-| Bring every default branch up to date | `kite update` |
-| Which stashes exist, and how old? | `kite stash` |
-| Which branches are finished? | `kite prune` (dry run) |
-| cd into a repo | `cd "$(kite path <name>)"` |
-| Local state only, no GitHub | add `--no-pr` |
+| Bring every default branch up to date                  | `kite update`               |
+| Which stashes exist, and how old?                      | `kite stash`                |
+| Which branches are finished?                           | `kite prune` (dry run)      |
+| cd into a repo                                         | `cd "$(kite path <name>)"`  |
+| Local state only, no GitHub                            | add `--no-pr`               |
 
 `--no-pr` also removes the `PR`, `RV` and `CI` columns and the indented PR rows. Leave it off
 for any question about PRs, reviews or CI.
@@ -40,6 +40,8 @@ names only, and fails rather than guessing when more than one repo matches.
 - `PR`, `RV` and `CI` show only when there's data. RV: `✓` approved, `✗` changes requested,
   `·` waiting, `✎` draft.
 - Indented `└` rows are your open-PR branches that aren't checked out.
+- Linked worktrees sit together under their main checkout. Stashes, `└` rows and the
+  `stash` and `prune` lists come once per repo, so a blank STASH on a worktree row isn't zero.
 - The footer says how stale the last fetch is. `status` never fetches, so run `kite update` first
   when freshness matters.
 

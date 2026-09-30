@@ -67,14 +67,22 @@ type ghPR struct {
 // version it does not skip repos sitting on their default branch: a repo can
 // be on main and still have an open PR whose branch was never cloned here.
 func attachPRs(repos []Repo) {
+	lists := make([][]ghPR, len(repos))
 	fan(len(repos), func(i int) {
 		r := &repos[i]
-		if r.Err != nil {
+		if r.Err != nil || r.Follower {
 			return
 		}
-		list, ok := listPRs(r.Path)
+		var ok bool
+		lists[i], ok = listPRs(r.Path)
 		r.PRErr = !ok
-		r.PR, r.Others = splitPRs(r.Branch, list)
+	})
+	assignPRs(repos, lists)
+	fan(len(repos), func(i int) {
+		r := &repos[i]
+		if r.Err != nil || r.Follower {
+			return
+		}
 		fillRows(r.Path, r.Default, r.Others, r.Refs)
 		for j := range r.Others {
 			o := &r.Others[j]
@@ -83,6 +91,42 @@ func attachPRs(repos []Repo) {
 			}
 		}
 	})
+}
+
+// assignPRs hands each leader's PR list out across its group: a PR whose
+// branch a follower has checked out goes on that follower's row, and every
+// other PR goes on the leader, so no PR renders twice.
+func assignPRs(repos []Repo, lists [][]ghPR) {
+	leaderOf := map[string]int{}
+	for i, r := range repos {
+		if !r.Follower {
+			leaderOf[groupKey(r)] = i
+		}
+	}
+	claimed := map[[2]int]bool{} // {leader index, PR number}
+	for i := range repos {
+		r := &repos[i]
+		l, ok := leaderOf[groupKey(*r)]
+		if !r.Follower || r.Err != nil || !ok {
+			continue
+		}
+		if r.PR, _ = splitPRs(r.Branch, lists[l]); r.PR != nil {
+			claimed[[2]int{l, r.PR.Number}] = true
+		}
+	}
+	for i := range repos {
+		r := &repos[i]
+		if r.Follower || r.Err != nil {
+			continue
+		}
+		var others []PRRow
+		r.PR, others = splitPRs(r.Branch, lists[i])
+		for _, o := range others {
+			if !claimed[[2]int{i, o.PR.Number}] {
+				r.Others = append(r.Others, o)
+			}
+		}
+	}
 }
 
 // splitPRs puts the checked-out branch's PR on the repo's own row and every
@@ -299,10 +343,12 @@ func pickQueue(list []ghSearchPR, names map[string]string) []ReviewReq {
 // --limit truncates an arbitrary 30 results rather than the newest, which is
 // the right end to lose given pickQueue puts the oldest PR on top.
 func reviewQueueArgs() []string {
-	return []string{"search", "prs",
+	return []string{
+		"search", "prs",
 		"--review-requested=@me", "--state=open", "--limit", "30",
 		"--sort", "created", "--order", "asc",
-		"--json", "repository,number,title,createdAt,isDraft"}
+		"--json", "repository,number,title,createdAt,isDraft",
+	}
 }
 
 // reviewQueue asks GitHub once for every PR awaiting your review. gh search

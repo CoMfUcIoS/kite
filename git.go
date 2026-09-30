@@ -75,6 +75,45 @@ type Repo struct {
 	// Conflicts means merging origin/<default> into the current branch would
 	// conflict. Local data, so it survives --no-pr.
 	Conflicts bool
+
+	// Linked worktrees share one git dir, and with it branches, stashes and
+	// PRs. CommonDir is that dir, empty when git can't say. Only a group's
+	// leader reads repo-wide data, and a zero-value Repo is its own leader.
+	CommonDir  string
+	Linked     bool // .git is a file: a linked worktree, not the main checkout
+	Follower   bool
+	LeaderName string
+}
+
+func groupKey(r Repo) string {
+	if r.CommonDir == "" {
+		return r.Path
+	}
+	return r.CommonDir
+}
+
+// markLeaders picks one leader per shared git dir: the main checkout, or the
+// first worktree by name when a filter dropped the main checkout. Run it after
+// filtering, so a filtered-out main checkout never leaves a group leaderless.
+func markLeaders(repos []Repo) {
+	lead := map[string]int{}
+	for i, r := range repos {
+		if j, seen := lead[groupKey(r)]; !seen || outranks(r, repos[j]) {
+			lead[groupKey(r)] = i
+		}
+	}
+	for i := range repos {
+		l := lead[groupKey(repos[i])]
+		repos[i].Follower = i != l
+		repos[i].LeaderName = repos[l].Name
+	}
+}
+
+func outranks(a, b Repo) bool {
+	if a.Linked != b.Linked {
+		return !a.Linked
+	}
+	return a.Name < b.Name
 }
 
 type Result struct {
@@ -166,6 +205,13 @@ func collect(path string, withConflicts bool) Repo {
 	}
 
 	r.Default = defaultBranch(path)
+
+	if s, err := git(path, "rev-parse", "--path-format=absolute", "--git-common-dir"); err == nil {
+		r.CommonDir = s
+	}
+	if fi, err := os.Stat(filepath.Join(path, ".git")); err == nil && !fi.IsDir() {
+		r.Linked = true
+	}
 
 	if s, err := git(path, "status", "--porcelain"); err == nil {
 		r.Dirty = countLines(s)
@@ -337,7 +383,9 @@ type Branch struct {
 	Merged   bool // an ancestor of origin/<default>
 	Gone     bool // upstream branch deleted
 	PRNumber int  // a merged PR for this branch, 0 when none or unknown
-	Current  bool // checked out here, so it cannot be deleted without switching
+	Current  bool // checked out in some worktree, so it cannot be deleted without switching
+
+	CheckedOutIn string // directory name of the worktree holding it, when Current
 
 	Err error
 }
@@ -383,7 +431,11 @@ func (b Branch) deletable(force bool) bool {
 
 func staleBranchesAll(repos []Repo, useGH bool) []Branch {
 	perRepo := make([][]Branch, len(repos))
-	fan(len(repos), func(i int) { perRepo[i] = staleBranches(repos[i]) })
+	fan(len(repos), func(i int) {
+		if !repos[i].Follower {
+			perRepo[i] = staleBranches(repos[i])
+		}
+	})
 
 	var all []Branch
 	for _, bs := range perRepo {
@@ -421,7 +473,7 @@ func staleBranches(r Repo) []Branch {
 	}
 
 	out, err := git(r.Path, "for-each-ref",
-		"--format=%(refname:short)%00%(upstream:track)%00%(HEAD)", "refs/heads")
+		"--format=%(refname:short)%00%(upstream:track)%00%(worktreepath)", "refs/heads")
 	if err != nil {
 		return fail(err)
 	}
@@ -438,7 +490,11 @@ func staleBranches(r Repo) []Branch {
 			Name:    fields[0],
 			Default: def,
 			Gone:    fields[1] == "[gone]",
-			Current: strings.TrimSpace(fields[2]) == "*",
+		}
+		// %(worktreepath) is set when any worktree of the repo has the
+		// branch checked out, not only this one.
+		if fields[2] != "" {
+			b.Current, b.CheckedOutIn = true, filepath.Base(fields[2])
 		}
 		// A squash merge leaves no ancestry, which is exactly why the Gone
 		// check above carries most of the weight.
@@ -484,7 +540,7 @@ func stashesAll(repos []Repo) []Stash {
 }
 
 func stashList(r Repo) []Stash {
-	if r.Err != nil {
+	if r.Err != nil || r.Follower {
 		return nil
 	}
 	// NUL separators: a stash subject is a commit message and can contain

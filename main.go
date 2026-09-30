@@ -3,6 +3,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"os"
@@ -113,6 +114,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "kite: no repo or branch matching %q in %s\n", o.filter, root)
 		os.Exit(1)
 	}
+	markLeaders(repos)
 
 	switch o.cmd {
 	case "prune":
@@ -125,6 +127,7 @@ func main() {
 		printUpdates(os.Stdout, updateAll(repos))
 		fmt.Println()
 		repos = collectAll(pathsOf(repos), withConflicts)
+		markLeaders(repos)
 	}
 
 	note := ""
@@ -436,7 +439,17 @@ func eachPR(repos []Repo, fn func(*PR)) {
 }
 
 func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
-	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
+	// Linked worktrees sit under their leader even when their names sort apart.
+	sort.Slice(repos, func(i, j int) bool {
+		a, b := repos[i], repos[j]
+		if ka, kb := cmp.Or(a.LeaderName, a.Name), cmp.Or(b.LeaderName, b.Name); ka != kb {
+			return ka < kb
+		}
+		if a.Follower != b.Follower {
+			return !a.Follower
+		}
+		return a.Name < b.Name
+	})
 
 	// A column nobody can fill is a column nobody should read. This covers a
 	// missing gh, an unauthenticated gh, --no-pr, and simply having no open PRs.
@@ -497,7 +510,9 @@ func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
 		if r.Dirty > 0 {
 			dirty++
 		}
-		stashes += r.Stashes
+		if !r.Follower {
+			stashes += r.Stashes
+		}
 		if !r.FetchedAt.IsZero() && (oldestFetch.IsZero() || r.FetchedAt.Before(oldestFetch)) {
 			oldestFetch = r.FetchedAt
 		}
@@ -597,6 +612,11 @@ func (r Repo) dirtyCell() cell {
 }
 
 func (r Repo) stashCell() cell {
+	if r.Follower {
+		// The stash stack is shared, so its count lives on the leader's row
+		// alone. A dash here would claim "no stashes".
+		return txt("")
+	}
 	if r.Stashes == 0 {
 		return hue(dim, "-")
 	}
@@ -753,8 +773,10 @@ func printPrune(w io.Writer, branches []Branch, doDelete, force bool) {
 
 	for _, b := range branches {
 		if b.Err != nil {
-			rows = append(rows, []cell{txt(b.Repo), hue(red, "-"),
-				rawCell(hue(red, "error: "+firstLine(b.Err.Error())).String())})
+			rows = append(rows, []cell{
+				txt(b.Repo), hue(red, "-"),
+				rawCell(hue(red, "error: "+firstLine(b.Err.Error())).String()),
+			})
 			failed++
 			continue
 		}
@@ -766,7 +788,7 @@ func printPrune(w io.Writer, branches []Branch, doDelete, force bool) {
 		case prunePR:
 			reason = hue(dim, fmt.Sprintf("PR #%d merged", b.PRNumber))
 		case pruneCurrent:
-			reason = hue(dim, "checked out here")
+			reason = hue(dim, "checked out in "+b.CheckedOutIn)
 		default:
 			reason = hue(yellow, "upstream gone, merge unconfirmed")
 		}

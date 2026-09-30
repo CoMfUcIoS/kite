@@ -872,14 +872,18 @@ func TestFirstFailing(t *testing.T) {
 
 func TestSplitPRs(t *testing.T) {
 	list := []ghPR{
-		{Number: 10, HeadRefName: "feature", ReviewDecision: "APPROVED",
-			StatusCheckRollup: []ghCheck{{Conclusion: "SUCCESS", Name: "build"}}},
+		{
+			Number: 10, HeadRefName: "feature", ReviewDecision: "APPROVED",
+			StatusCheckRollup: []ghCheck{{Conclusion: "SUCCESS", Name: "build"}},
+		},
 		{Number: 11, HeadRefName: "other", IsDraft: true},
-		{Number: 12, HeadRefName: "third", ReviewDecision: "REVIEW_REQUIRED",
+		{
+			Number: 12, HeadRefName: "third", ReviewDecision: "REVIEW_REQUIRED",
 			StatusCheckRollup: []ghCheck{
 				{Conclusion: "FAILURE", Name: "lint"},
 				{Conclusion: "FAILURE", Name: "vet"},
-			}},
+			},
+		},
 	}
 
 	own, others := splitPRs("feature", list)
@@ -1309,8 +1313,10 @@ func TestRenderGridAlignmentWithSubRows(t *testing.T) {
 	rows := [][]cell{
 		{hue(dim, "REPO"), hue(dim, "BRANCH"), hue(dim, "vs MAIN"), hue(dim, "PR"), hue(dim, "RV"), hue(dim, "CI")},
 		{txt("caddy"), txt("main"), hue(dim, "-"), txt(""), txt(""), txt("")},
-		{txt(""), hue(cyan, "└ feat/http3-probe"), hue(red, "-14!"), txt("#3232"), hue(dim, "·"),
-			rawCell(hue(red, "✗").String() + " " + hue(dim, "lint +2").String())},
+		{
+			txt(""), hue(cyan, "└ feat/http3-probe"), hue(red, "-14!"), txt("#3232"), hue(dim, "·"),
+			rawCell(hue(red, "✗").String() + " " + hue(dim, "lint +2").String()),
+		},
 		{txt("grafana"), hue(cyan, "fix/nil-deref"), txt("-4"), txt("#887"), hue(green, "✓"), hue(green, "✓")},
 	}
 
@@ -1590,5 +1596,164 @@ func TestPRLookupNotePluralizes(t *testing.T) {
 	}
 	if got := prLookupNote(2); got != "2 PR lookups failed" {
 		t.Errorf("prLookupNote(2) = %q, want %q", got, "2 PR lookups failed")
+	}
+}
+
+// addWorktree adds a linked worktree of clone on a new branch, next to it.
+func addWorktree(t *testing.T, clone, branch string) string {
+	t.Helper()
+	dir := filepath.Join(filepath.Dir(clone), "work-"+branch)
+	mustGit(t, clone, "worktree", "add", "-q", "-b", branch, dir)
+	return dir
+}
+
+func TestCollectRecordsCommonDir(t *testing.T) {
+	_, clone := workspace(t)
+	wt := addWorktree(t, clone, "wt")
+
+	primary, linked := collect(clone, false), collect(wt, false)
+	if primary.CommonDir == "" || primary.CommonDir != linked.CommonDir {
+		t.Errorf("CommonDir = %q and %q, want the same non-empty dir", primary.CommonDir, linked.CommonDir)
+	}
+	if primary.Linked || !linked.Linked {
+		t.Errorf("Linked = %v/%v, want false for the clone, true for the worktree", primary.Linked, linked.Linked)
+	}
+}
+
+func TestMarkLeaders(t *testing.T) {
+	repos := []Repo{
+		{Name: "a-worktree", CommonDir: "/x/.git", Linked: true},
+		{Name: "z-main", CommonDir: "/x/.git"},
+		{Name: "solo"},
+		{Name: "b-wt", CommonDir: "/y/.git", Linked: true},
+		{Name: "a-wt", CommonDir: "/y/.git", Linked: true},
+	}
+	markLeaders(repos)
+
+	want := map[string]struct {
+		follower bool
+		leader   string
+	}{
+		"a-worktree": {true, "z-main"},
+		"z-main":     {false, "z-main"},
+		"solo":       {false, "solo"},
+		"b-wt":       {true, "a-wt"}, // main checkout filtered out: first name leads
+		"a-wt":       {false, "a-wt"},
+	}
+	for _, r := range repos {
+		w := want[r.Name]
+		if r.Follower != w.follower || r.LeaderName != w.leader {
+			t.Errorf("%s: Follower=%v LeaderName=%q, want %v/%q", r.Name, r.Follower, r.LeaderName, w.follower, w.leader)
+		}
+	}
+}
+
+func TestStashesAllListsSharedStashOnce(t *testing.T) {
+	_, clone := workspace(t)
+	wt := addWorktree(t, clone, "wt")
+	writeFile(t, clone, "one.txt", "modified")
+	mustGit(t, clone, "stash", "push", "-m", "shared")
+
+	repos := collectAll([]string{clone, wt}, false)
+	markLeaders(repos)
+	got := stashesAll(repos)
+	if len(got) != 1 {
+		t.Fatalf("got %d stashes, want the shared stash once: %+v", len(got), got)
+	}
+	if got[0].Repo != "work" {
+		t.Errorf("Repo = %q, want the main checkout's name", got[0].Repo)
+	}
+}
+
+func TestStaleBranchesAllOncePerGroup(t *testing.T) {
+	_, clone := workspace(t)
+	mustGit(t, clone, "branch", "merged-branch") // at main, so an ancestor of origin/main
+	wt := addWorktree(t, clone, "wt")
+
+	repos := collectAll([]string{clone, wt}, false)
+	markLeaders(repos)
+	var names []string
+	for _, b := range staleBranchesAll(repos, false) {
+		names = append(names, b.Repo+":"+b.Name)
+	}
+	// wt was branched from main, so it counts as merged too; it is listed as checked out.
+	if len(names) != 2 {
+		t.Fatalf("got %v, want merged-branch and wt once each", names)
+	}
+}
+
+func TestStaleBranchCheckedOutInSiblingIsCurrent(t *testing.T) {
+	_, clone := workspace(t)
+	wt := addWorktree(t, clone, "gone-branch")
+	writeFile(t, wt, "gone.txt", "gone")
+	mustGit(t, wt, "add", ".")
+	mustGit(t, wt, "commit", "-qm", "gone work")
+	mustGit(t, wt, "push", "-q", "-u", "origin", "gone-branch")
+	mustGit(t, wt, "push", "-q", "origin", "--delete", "gone-branch")
+
+	var b Branch
+	for _, got := range staleBranches(collect(clone, false)) {
+		if got.Name == "gone-branch" {
+			b = got
+		}
+	}
+	if !b.Current {
+		t.Fatalf("Current=false for a branch checked out in a sibling worktree (%+v)", b)
+	}
+	if b.CheckedOutIn != filepath.Base(wt) {
+		t.Errorf("CheckedOutIn = %q, want %q", b.CheckedOutIn, filepath.Base(wt))
+	}
+	if b.deletable(true) {
+		t.Error("a branch checked out in any worktree must never be deletable")
+	}
+}
+
+func TestAssignPRsGivesFollowerItsBranchPR(t *testing.T) {
+	repos := []Repo{
+		{Name: "app", Branch: "main"},
+		{Name: "app-feat", Branch: "feat", Follower: true, LeaderName: "app"},
+	}
+	lists := [][]ghPR{{
+		{Number: 1, HeadRefName: "feat"},
+		{Number: 2, HeadRefName: "other"},
+	}, nil}
+	assignPRs(repos, lists)
+
+	if p := repos[1].PR; p == nil || p.Number != 1 {
+		t.Errorf("follower PR = %+v, want #1", p)
+	}
+	if repos[0].PR != nil {
+		t.Errorf("leader PR = %+v, want none: it is on main", repos[0].PR)
+	}
+	if o := repos[0].Others; len(o) != 1 || o[0].PR.Number != 2 {
+		t.Errorf("leader sub-rows = %+v, want only #2: #1 already has a row", o)
+	}
+	if repos[1].Others != nil {
+		t.Errorf("follower sub-rows = %+v, want none", repos[1].Others)
+	}
+}
+
+func TestPrintTableGroupsWorktrees(t *testing.T) {
+	repos := []Repo{
+		{Name: "mid", Branch: "main", Default: "main"},
+		{Name: "alpha", Branch: "feat", Default: "main", Stashes: 2, Follower: true, LeaderName: "zeta"},
+		{Name: "zeta", Branch: "main", Default: "main", Stashes: 2, LeaderName: "zeta"},
+	}
+	var buf bytes.Buffer
+	printTable(&buf, repos, false, "")
+	lines := strings.Split(stripANSI(buf.String()), "\n")
+
+	var order []string
+	for _, l := range lines[1:4] {
+		order = append(order, strings.Fields(l)[0])
+	}
+	if strings.Join(order, ",") != "mid,zeta,alpha" {
+		t.Errorf("row order = %v, want mid,zeta,alpha: a group sorts by its leader, leader first", order)
+	}
+	if f := strings.Fields(lines[3]); f[len(f)-1] == "2" {
+		t.Errorf("follower row %q shows the shared stash count", lines[3])
+	}
+	if !strings.Contains(buf.String(), "2 stashes") || strings.Contains(buf.String(), "4 stashes") {
+		t.Errorf("footer should count the shared stashes once:\n%s", stripANSI(buf.String()))
 	}
 }

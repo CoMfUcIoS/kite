@@ -97,7 +97,7 @@ caddy       feat/http3-probe    PR #3076 merged                   would delete
 caddy       fix/1234-nil-deref  PR #3065 merged                   would delete
 etcd        chore/bump-deps     merged into main                  would delete
 grafana     spike/new-parser    upstream gone, merge unconfirmed  needs --force
-prometheus  release/v3          checked out here                  skipped
+prometheus  release/v3          checked out in prometheus         skipped
 
 3 would delete · 1 needs --force · 1 checked out · nothing changed (kite prune --delete)
 ```
@@ -115,14 +115,15 @@ But a vanished upstream is not proof of a merge either: closing a pull request
 without merging also deletes its branch, and that branch may hold the only copy
 of the work. So there are three tiers:
 
-| What kite found | What it does |
-| --- | --- |
-| an ancestor of the default branch | deletes with `git branch -d`, so git double-checks |
-| upstream gone, and `gh` confirms a merged PR | deletes with `-D` |
-| upstream gone, no merged PR found | reports it, needs `--force` |
+| What kite found                              | What it does                                       |
+| -------------------------------------------- | -------------------------------------------------- |
+| an ancestor of the default branch            | deletes with `git branch -d`, so git double-checks |
+| upstream gone, and `gh` confirms a merged PR | deletes with `-D`                                  |
+| upstream gone, no merged PR found            | reports it, needs `--force`                        |
 
-The checked-out branch is never deleted, not even with `--force`, because
-removing it would mean switching away and kite never switches branches.
+A branch checked out in any worktree of the repo is never deleted, not even with
+`--force`, because removing it would mean switching away and kite never switches
+branches.
 
 ## Finding forgotten work
 
@@ -136,8 +137,16 @@ grafana  stash@{1}  2 days ago      WIP on feat/retry-backoff: first attempt, su
 3 stashes · git -C <repo> stash show -p <ref>
 ```
 
-The status table gives you a stash *count*. A count cannot tell you whether that
+The status table gives you a stash _count_. A count cannot tell you whether that
 is twenty minutes of work or a week-old dead end. This can.
+
+## Linked worktrees
+
+Worktrees of one repo share its branches, stashes and PRs, so kite reports those
+once. Each worktree still gets its own row, sorted under the main checkout, with
+its own branch, dirty count and PR. A blank `STASH` on a worktree row isn't zero:
+the count sits on the main checkout's row. `stash` and `prune` list each stash
+and branch once.
 
 ## Jumping between repos
 
@@ -161,15 +170,15 @@ kite: 2 repos match "agent", be more specific:
 
 ## Columns
 
-| Column | Meaning |
-| --- | --- |
-| `DIRTY` | modified plus untracked files |
-| `↑↓` | commits ahead of and behind the branch's own upstream; `·` when there's nothing to compare against — no upstream configured, the upstream is `[gone]`, or (on a sub-row) the branch never resolved to anything |
-| `vs MAIN` | commits this branch is behind `origin/main` as of the last fetch; a trailing `!` means merging `main` in would conflict. Blank, not `-`, when kite can't resolve the branch to a ref or doesn't know the default branch — `-` means level with main, blank means unknown |
-| `STASH` | stashes sitting in the repo |
-| `LAST` | age of the newest commit |
-| `PR` / `CI` | open PR and its rolled-up check status, for branches that aren't the default |
-| `RV` | review state: `✓` approved, `✗` changes requested, `·` waiting on reviewers, `✎` draft |
+| Column      | Meaning                                                                                                                                                                                                                                                                  |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `DIRTY`     | modified plus untracked files                                                                                                                                                                                                                                            |
+| `↑↓`        | commits ahead of and behind the branch's own upstream; `·` when there's nothing to compare against — no upstream configured, the upstream is `[gone]`, or (on a sub-row) the branch never resolved to anything                                                           |
+| `vs MAIN`   | commits this branch is behind `origin/main` as of the last fetch; a trailing `!` means merging `main` in would conflict. Blank, not `-`, when kite can't resolve the branch to a ref or doesn't know the default branch — `-` means level with main, blank means unknown |
+| `STASH`     | stashes sitting in the repo                                                                                                                                                                                                                                              |
+| `LAST`      | age of the newest commit                                                                                                                                                                                                                                                 |
+| `PR` / `CI` | open PR and its rolled-up check status, for branches that aren't the default                                                                                                                                                                                             |
+| `RV`        | review state: `✓` approved, `✗` changes requested, `·` waiting on reviewers, `✎` draft                                                                                                                                                                                   |
 
 `PR`, `RV` and `CI` appear only when there is something to put in them. Without
 `gh` installed or authenticated, or with `--no-pr`, or with nothing checked out
@@ -266,12 +275,12 @@ Commit messages on `main` must follow
 [Conventional Commits](https://www.conventionalcommits.org/), because that is what
 decides the next version:
 
-| Commit prefix | Effect |
-| --- | --- |
-| `fix:` | patch bump, listed under Bug Fixes |
-| `feat:` | minor bump, listed under Features |
+| Commit prefix                           | Effect                                  |
+| --------------------------------------- | --------------------------------------- |
+| `fix:`                                  | patch bump, listed under Bug Fixes      |
+| `feat:`                                 | minor bump, listed under Features       |
 | `feat!:` or a `BREAKING CHANGE:` footer | minor bump while below 1.0, major after |
-| `chore:`, `docs:`, `refactor:`, `test:` | no release, no changelog entry |
+| `chore:`, `docs:`, `refactor:`, `test:` | no release, no changelog entry          |
 
 On every push to `main` the workflow opens or updates a single release PR titled
 `chore(main): release kite X.Y.Z`, carrying the version bump and the generated
