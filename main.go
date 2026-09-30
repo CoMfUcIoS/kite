@@ -57,11 +57,20 @@ reading the table:
   LAST      age of the newest commit (m, h, d, w)
   PR        your open PR for the branch
   RV        ✓ approved, ✗ changes requested, · waiting on reviewers, ✎ draft
-  CI        ✓ passing, ○ pending, ✗ failing, followed by the first failing check
+  CI        ✓ passing, ○ pending, ✗ failing, followed by the first failing
+            check's name and +N when N more checks fail too
   ├ └       in REPO: a linked worktree of the repo above it
   ↳         in BRANCH: your open PR on a branch nobody has checked out
 
---json values:
+--json shape:
+  repos         one entry per checkout, main checkouts and worktrees alike,
+                in table order. behindMain, conflicts, ahead and behind are
+                the vs MAIN and ↑↓ columns; detached means HEAD is a bare
+                commit and branch holds its short hash
+  otherPRs      your open PRs on branches no checkout has, one per ↳ row.
+                resolved is false when kite can't find the branch here or
+                doesn't know the default branch, so its counts are unknown
+  fetchedAt     when this checkout last fetched
   pr.ci         pass, fail, pending, or "" with no checks
   pr.review     approved, changes, required, draft, or ""
   pr.failing    the first failing check, present only when ci is fail
@@ -69,7 +78,9 @@ reading the table:
                 carry no stashes key
   rewritten     true when the upstream was force-pushed over this branch
   timing        totalMs, gitMs and githubMs for the run
-  prune verdict merged, pr-merged, unverified, current, error
+  prune verdict merged (into the default branch), pr-merged (its PR merged),
+                unverified (upstream gone, no merged PR found), current
+                (checked out and kept), error
   prune action  would delete, would remove worktree and delete, deleted,
                 needs --force, skipped, failed
   Keys with nothing to say (pr, otherPRs, error, unknown times) are left out
