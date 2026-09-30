@@ -39,6 +39,11 @@ appears on a terminal, so pipes, scripts and `--json` consumers never see it.
 The footer ends with how long the run took, split into local git work and
 GitHub lookups.
 
+On a terminal narrower than the table, kite shortens the REPO and BRANCH
+columns with a `…` in the middle, keeping each name's start and end, until the
+rows fit. It stops at 16 characters per column. Piped output and `--json` always
+carry the full names, and `COLUMNS` overrides the detected width.
+
 ## Usage
 
 ```

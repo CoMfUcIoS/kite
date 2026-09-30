@@ -9,9 +9,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime/debug"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -454,6 +456,8 @@ const (
 
 var colorOn bool
 
+var ansiRE = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
 func initColor() {
 	if os.Getenv("NO_COLOR") != "" {
 		return
@@ -652,6 +656,9 @@ func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
 				subRowMainCell(o),
 				hue(dim, "-"), o.LastCommit, &o.PR)
 		}
+	}
+	if tw := termWidth(); tw > 0 {
+		fitColumns(rows, tw, 2, 0, 1)
 	}
 	renderGrid(w, rows, 2)
 
@@ -865,6 +872,77 @@ func ciCell(p *PR) cell {
 		return rawCell(hue(red, "✗").String() + " " + hue(dim, s).String())
 	}
 	return txt("")
+}
+
+// minFitWidth is as far as fitColumns shortens a column; below it names stop
+// being recognisable.
+const minFitWidth = 16
+
+// termWidth is 0 unless stdout is a terminal, so pipes and scripts always get
+// full names. COLUMNS overrides the ioctl.
+func termWidth() int {
+	fi, err := os.Stdout.Stat()
+	if err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+		return 0
+	}
+	if n, err := strconv.Atoi(os.Getenv("COLUMNS")); err == nil && n > 0 {
+		return n
+	}
+	return ttyColumns(os.Stdout)
+}
+
+// fitColumns shortens the cells of cols, widest column first, until a row is
+// at most limit wide or every such column is down to minFitWidth.
+func fitColumns(rows [][]cell, limit, gap int, cols ...int) {
+	var widths []int
+	for _, r := range rows {
+		for i, c := range r {
+			for len(widths) <= i {
+				widths = append(widths, 0)
+			}
+			// A raw cell measures zero for padding, but it still takes room.
+			w := c.width()
+			if c.raw != "" {
+				w = utf8.RuneCountInString(ansiRE.ReplaceAllString(c.raw, ""))
+			}
+			widths[i] = max(widths[i], w)
+		}
+	}
+	total := gap * (len(widths) - 1)
+	for _, w := range widths {
+		total += w
+	}
+	for total > limit {
+		best := -1
+		for _, c := range cols {
+			if c < len(widths) && widths[c] > minFitWidth && (best < 0 || widths[c] > widths[best]) {
+				best = c
+			}
+		}
+		if best < 0 {
+			break
+		}
+		widths[best]--
+		total--
+	}
+	for _, r := range rows {
+		for _, c := range cols {
+			if c < len(r) && r[c].width() > widths[c] {
+				r[c].text = truncMid(r[c].text, widths[c])
+			}
+		}
+	}
+}
+
+// truncMid keeps a name's start and end, where worktree and branch names
+// carry the parts that tell them apart.
+func truncMid(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	head := n / 2
+	return string(r[:head]) + "…" + string(r[len(r)-(n-1-head):])
 }
 
 // truncate caps a check name. CI is the final column and never padded, so this

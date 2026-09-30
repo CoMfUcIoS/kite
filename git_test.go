@@ -12,9 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
-
-var ansiRE = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
 func stripANSI(s string) string { return ansiRE.ReplaceAllString(s, "") }
 
@@ -2528,5 +2527,62 @@ func TestUsageDocumentsEverySymbol(t *testing.T) {
 		if !strings.Contains(usage, w) {
 			t.Errorf("--help never explains %q", w)
 		}
+	}
+}
+
+func TestTruncMid(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		n    int
+		want string
+	}{
+		{"short", 10, "short"},
+		{"_worktrees/http-service-mongodb-cloudscanner", 20, "_worktrees…udscanner"},
+		{"├ feat/very-long-branch", 12, "├ feat…ranch"},
+	} {
+		got := truncMid(c.in, c.n)
+		if got != c.want || utf8.RuneCountInString(got) > c.n {
+			t.Errorf("truncMid(%q, %d) = %q, want %q", c.in, c.n, got, c.want)
+		}
+	}
+}
+
+func TestFitColumnsShrinksRepoAndBranchToFit(t *testing.T) {
+	rows := [][]cell{
+		{txt("REPO"), txt("BRANCH"), txt("DIRTY")},
+		{txt("├ _worktrees/http-service-mongodb-cloudscanner"), hue(cyan, "feat/cloudscanner-use-mongodb-service-cloudscanner"), txt("3")},
+		{txt("solo"), txt("main"), txt("-")},
+	}
+	fitColumns(rows, 60, 2, 0, 1)
+	var buf bytes.Buffer
+	renderGrid(&buf, rows, 2)
+	for _, l := range strings.Split(strings.TrimRight(buf.String(), "\n"), "\n") {
+		if n := utf8.RuneCountInString(stripANSI(l)); n > 60 {
+			t.Errorf("line is %d wide, want at most 60: %q", n, l)
+		}
+	}
+	if !strings.HasPrefix(rows[1][0].text, "├ _worktrees") || !strings.HasSuffix(rows[1][0].text, "cloudscanner") {
+		t.Errorf("REPO = %q, want the start and the end kept", rows[1][0].text)
+	}
+	if rows[1][1].color != cyan {
+		t.Error("shortening a cell must keep its color")
+	}
+}
+
+func TestFitColumnsStopsAtTheFloor(t *testing.T) {
+	rows := [][]cell{{txt(strings.Repeat("r", 40)), txt(strings.Repeat("b", 40)), txt("x")}}
+	fitColumns(rows, 10, 2, 0, 1)
+	if w := rows[0][0].width(); w != minFitWidth {
+		t.Errorf("REPO width = %d, want the %d-column floor", w, minFitWidth)
+	}
+}
+
+func TestFitColumnsCountsRawTrailingCells(t *testing.T) {
+	rows := [][]cell{{txt(strings.Repeat("r", 30)), txt(strings.Repeat("b", 30)), rawCell(hue(red, "✗").String() + " lint +2")}}
+	fitColumns(rows, 60, 2, 0, 1)
+	var buf bytes.Buffer
+	renderGrid(&buf, rows, 2)
+	if n := utf8.RuneCountInString(stripANSI(strings.TrimRight(buf.String(), "\n"))); n > 60 {
+		t.Errorf("a raw last cell must count toward the width, row is %d wide", n)
 	}
 }
