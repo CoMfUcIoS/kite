@@ -41,8 +41,10 @@ rather than guessing when more than one repo matches.
 - `PR`, `RV` and `CI` show only when there's data. RV: `✓` approved, `✗` changes requested,
   `·` waiting, `✎` draft.
 - Indented `└` rows are your open-PR branches that aren't checked out.
-- Linked worktrees sit together under their main checkout. Stashes, `└` rows and the
-  `stash` and `prune` lists come once per repo, so a blank STASH on a worktree row isn't zero.
+- Linked worktrees sit under their main checkout as `├`/`└` rows in the REPO column, named by
+  their path relative to the root (`~/…` when outside it). Stashes, PR sub-rows and the
+  `stash`, `prune` and `update` lines come once per repo, so a blank STASH on a worktree row
+  isn't zero.
 - The footer says how stale the last fetch is. `status` never fetches, so run `kite update` first
   when freshness matters.
 

@@ -81,7 +81,8 @@ $ kite update
 ✗  traefik     fetch failed: could not read from remote repository (on release/v3)
 ```
 
-On the default branch it runs `git merge --ff-only origin/main`. Anywhere else it
+Where `main` is checked out, in this repo or any of its worktrees, it runs
+`git merge --ff-only origin/main` there. When nothing has `main` checked out it
 runs `git fetch . origin/main:main`, which advances the local `main` ref without a
 checkout, so your working tree and current branch don't move even with
 uncommitted changes. Git enforces the fast-forward, so a diverged local `main` is
@@ -144,10 +145,20 @@ is twenty minutes of work or a week-old dead end. This can.
 ## Linked worktrees
 
 Worktrees of one repo share its branches, stashes and PRs, so kite reports those
-once. Each worktree still gets its own row, sorted under the main checkout, with
-its own branch, dirty count and PR. A blank `STASH` on a worktree row isn't zero:
+once. Each worktree still gets its own row under the main checkout, drawn as a
+branch of it, with its own branch, dirty count and PR:
+
+```
+REPO                         BRANCH                DIRTY  ↑↓  vs MAIN  STASH  LAST
+grafana                      main                  -      -   -        1      2h
+├ _worktrees/grafana-alerts  feat/alert-routing    3      ↑1  -4                1h
+└ _worktrees/grafana-otel    fix/otel-exporter     -      ·   -4                5d
+```
+
+The name is the worktree's path relative to `--root`, or starts with `~/` when it
+lives outside the root altogether. A blank `STASH` on a worktree row isn't zero:
 the count sits on the main checkout's row. `stash` and `prune` list each stash
-and branch once.
+and branch once, and `update` fetches each repo once.
 
 A worktree kept outside the root, say in a `_worktrees` folder, still shows up.
 kite asks `git worktree list` for every repo that has linked worktrees, and a
