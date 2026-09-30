@@ -7,8 +7,8 @@ description: Use when working across many git repos or worktrees that sit side b
 
 ## Overview
 
-kite reads every git repo one level inside a directory and answers multi-repo questions in one
-call. Reach for it before writing a `for repo in */` loop. Those loops miss worktrees (their
+kite reads every git repo one level inside a directory, plus each one's linked worktrees
+wherever they live, and answers multi-repo questions in one call. Reach for it before writing a `for repo in */` loop. Those loops miss worktrees (their
 `.git` is a file, not a directory), can't tell a conflicting branch from a behind one, and
 `git fetch` alone never moves a local `main`.
 
@@ -28,8 +28,9 @@ Run it from the directory that holds the repos, or pass `--root <dir>`.
 `--no-pr` also removes the `PR`, `RV` and `CI` columns and the indented PR rows. Leave it off
 for any question about PRs, reviews or CI.
 
-A filter matches a repo name **or** its current branch, case-insensitively. `path` matches repo
-names only, and fails rather than guessing when more than one repo matches.
+A filter matches a repo name **or** its current branch, case-insensitively. `path` matches the
+names of directories in the root only, so it can't find a worktree kept elsewhere, and it fails
+rather than guessing when more than one repo matches.
 
 ## Reading the table
 

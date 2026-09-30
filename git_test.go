@@ -1757,3 +1757,83 @@ func TestPrintTableGroupsWorktrees(t *testing.T) {
 		t.Errorf("footer should count the shared stashes once:\n%s", stripANSI(buf.String()))
 	}
 }
+
+// outsideWorktree adds a linked worktree of clone in a directory of its own,
+// away from clone's parent, the way a _worktrees folder would hold it.
+func outsideWorktree(t *testing.T, clone, branch string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), branch)
+	mustGit(t, clone, "worktree", "add", "-q", "-b", branch, dir)
+	return dir
+}
+
+func sameDirs(t *testing.T, got, want []string) {
+	t.Helper()
+	norm := func(ps []string) []string {
+		var out []string
+		for _, p := range ps {
+			out = append(out, realPath(p))
+		}
+		sort.Strings(out)
+		return out
+	}
+	if g, w := norm(got), norm(want); strings.Join(g, "\n") != strings.Join(w, "\n") {
+		t.Errorf("got %v, want %v", g, w)
+	}
+}
+
+func TestWithWorktreesFindsOutsideWorktree(t *testing.T) {
+	_, clone := workspace(t)
+	wt := outsideWorktree(t, clone, "far")
+	sameDirs(t, withWorktrees([]string{clone}), []string{clone, wt})
+}
+
+func TestWithWorktreesPullsInMainCheckout(t *testing.T) {
+	_, clone := workspace(t)
+	wt := outsideWorktree(t, clone, "far")
+	sameDirs(t, withWorktrees([]string{wt}), []string{wt, clone})
+}
+
+func TestWithWorktreesSkipsPrunable(t *testing.T) {
+	_, clone := workspace(t)
+	wt := outsideWorktree(t, clone, "gone")
+	if err := os.RemoveAll(wt); err != nil {
+		t.Fatal(err)
+	}
+	sameDirs(t, withWorktrees([]string{clone}), []string{clone})
+}
+
+func TestWithWorktreesNoDuplicates(t *testing.T) {
+	_, clone := workspace(t)
+	near := addWorktree(t, clone, "near")
+	far := outsideWorktree(t, clone, "far")
+
+	// Relative spellings of paths git reports as absolute must still dedupe.
+	t.Chdir(filepath.Dir(clone))
+	in := []string{filepath.Base(clone), filepath.Base(near)}
+	got := withWorktrees(in)
+	if got[0] != in[0] || got[1] != in[1] {
+		t.Errorf("discovered paths must keep their spelling and order: %v", got)
+	}
+	sameDirs(t, got, []string{clone, near, far})
+}
+
+func TestWithWorktreesLeavesPlainReposAlone(t *testing.T) {
+	_, clone := workspace(t)
+	if got := withWorktrees([]string{clone}); len(got) != 1 || got[0] != clone {
+		t.Errorf("got %v, want just the clone", got)
+	}
+}
+
+func TestPrintTableFetchAgeIsNewestPerGroup(t *testing.T) {
+	now, old := time.Now(), time.Now().Add(-48*time.Hour)
+	repos := []Repo{
+		{Name: "app", CommonDir: "/app/.git", FetchedAt: now},
+		{Name: "app-wt", CommonDir: "/app/.git", FetchedAt: old, Follower: true, LeaderName: "app"},
+	}
+	var buf bytes.Buffer
+	printTable(&buf, repos, false, "")
+	if out := stripANSI(buf.String()); !strings.Contains(out, "fetched just now") {
+		t.Errorf("a worktree shares its repo's remote refs, so one fresh fetch covers the group:\n%s", out)
+	}
+}

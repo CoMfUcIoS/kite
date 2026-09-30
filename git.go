@@ -159,6 +159,82 @@ func discover(root string) []string {
 	return out
 }
 
+// withWorktrees appends every linked worktree of the discovered repos, wherever
+// it lives, along with the main checkout of a worktree found in the root.
+// Discovered paths keep their spelling and order.
+func withWorktrees(paths []string) []string {
+	listed := make([][]string, len(paths))
+	fan(len(paths), func(i int) {
+		if hasWorktrees(paths[i]) {
+			listed[i] = worktreeList(paths[i])
+		}
+	})
+	seen := map[string]bool{}
+	for _, p := range paths {
+		seen[realPath(p)] = true
+	}
+	out := paths
+	for _, ws := range listed {
+		for _, w := range ws {
+			if !seen[realPath(w)] {
+				seen[realPath(w)] = true
+				out = append(out, w)
+			}
+		}
+	}
+	return out
+}
+
+// hasWorktrees is a stat, not a git call, so repos without linked worktrees
+// cost nothing. A .git file means path is itself a linked worktree.
+func hasWorktrees(path string) bool {
+	fi, err := os.Stat(filepath.Join(path, ".git"))
+	if err != nil {
+		return false
+	}
+	if !fi.IsDir() {
+		return true
+	}
+	_, err = os.Stat(filepath.Join(path, ".git", "worktrees"))
+	return err == nil
+}
+
+// worktreeList skips bare entries and prunable ones, whose directory is gone.
+func worktreeList(path string) []string {
+	out, err := git(path, "worktree", "list", "--porcelain")
+	if err != nil {
+		return nil
+	}
+	var dirs []string
+	for _, block := range strings.Split(out, "\n\n") {
+		dir, skip := "", false
+		for _, line := range strings.Split(block, "\n") {
+			switch {
+			case strings.HasPrefix(line, "worktree "):
+				dir = strings.TrimPrefix(line, "worktree ")
+			case line == "bare", strings.HasPrefix(line, "prunable"):
+				skip = true
+			}
+		}
+		if dir != "" && !skip {
+			dirs = append(dirs, dir)
+		}
+	}
+	return dirs
+}
+
+// realPath is the dedupe key: git reports worktrees absolute and with
+// symlinks resolved, while discovered paths are spelled however --root was.
+func realPath(p string) string {
+	if abs, err := filepath.Abs(p); err == nil {
+		p = abs
+	}
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return p
+}
+
 // withConflicts controls whether collect spends a merge-tree subprocess per
 // repo on the conflict marker. Only status and update render it; prune and
 // stash never do, so it would be pure waste there.
