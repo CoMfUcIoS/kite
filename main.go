@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"fmt"
 	"io"
@@ -38,6 +39,8 @@ flags:
   --no-pr                  skip the GitHub lookups
   --delete                 prune only: actually delete the branches
   --force                  prune only: also delete branches whose merge is unconfirmed
+  --no-pager               print straight to the terminal instead of through the
+                           pager (KITE_PAGER, then PAGER, then less)
   --json                   one JSON document on stdout instead of the table, for
                            status, update, stash and prune (not path)
   --version                print the version
@@ -91,13 +94,14 @@ reading the table:
 `
 
 type opts struct {
-	cmd    string // status, update, prune, stash, path, version or help
-	filter string
-	root   string
-	noPR   bool
-	delete bool
-	force  bool
-	json   bool
+	cmd     string // status, update, prune, stash, path, version or help
+	filter  string
+	root    string
+	noPR    bool
+	delete  bool
+	force   bool
+	noPager bool
+	json    bool
 }
 
 var commands = []string{"status", "update", "prune", "stash", "path"}
@@ -156,6 +160,8 @@ func main() {
 	}
 	paths = withWorktrees(paths)
 	prog = startProgress()
+	var out bytes.Buffer
+	pageable := !o.json && !o.noPager
 
 	// Only status and update render the conflict marker; prune and stash
 	// would pay for a merge-tree per repo and never show it.
@@ -183,7 +189,8 @@ func main() {
 		if o.json {
 			writeJSON(os.Stdout, pruneJSON(rows))
 		} else {
-			printPrune(os.Stdout, rows, o.delete)
+			printPrune(&out, rows, o.delete)
+			emit(out.Bytes(), pageable)
 		}
 		return
 	case "stash":
@@ -193,17 +200,16 @@ func main() {
 		if o.json {
 			writeJSON(os.Stdout, stashJSON(stashes))
 		} else {
-			printStashes(os.Stdout, stashes)
+			printStashes(&out, stashes)
+			emit(out.Bytes(), pageable)
 		}
 		return
 	case "update":
 		prog.phase("updating", leaders(repos))
 		updates = updateAll(repos)
 		if !o.json {
-			prog.stop()
-			printUpdates(os.Stdout, updates)
-			fmt.Println()
-			prog = startProgress()
+			printUpdates(&out, updates)
+			fmt.Fprintln(&out)
 		}
 		prog.phase("reading repos", len(repos))
 		repos = collectAll(pathsOf(repos), withConflicts)
@@ -239,8 +245,9 @@ func main() {
 		parts = append(parts, prLookupNote(failed))
 	}
 	parts = append(parts, timingLine(total, local, gh))
-	printTable(os.Stdout, repos, o.cmd == "update", strings.Join(parts, " · "))
-	printReviewQueue(os.Stdout, queue)
+	printTable(&out, repos, o.cmd == "update", strings.Join(parts, " · "))
+	printReviewQueue(&out, queue)
+	emit(out.Bytes(), pageable)
 }
 
 func leaders(repos []Repo) int {
@@ -336,6 +343,8 @@ func parseArgs(args []string) (opts, error) {
 			o.delete = true
 		case a == "--force", a == "-force":
 			o.force = true
+		case a == "--no-pager", a == "-no-pager":
+			o.noPager = true
 		case a == "--json", a == "-json":
 			o.json = true
 		case a == "-h", a == "--help", a == "help":
@@ -462,8 +471,7 @@ func initColor() {
 	if os.Getenv("NO_COLOR") != "" {
 		return
 	}
-	fi, err := os.Stdout.Stat()
-	colorOn = err == nil && fi.Mode()&os.ModeCharDevice != 0
+	colorOn = isTerminal(os.Stdout)
 }
 
 // cell keeps text and color apart so column widths can be measured on the text
@@ -881,8 +889,7 @@ const minFitWidth = 16
 // termWidth is 0 unless stdout is a terminal, so pipes and scripts always get
 // full names. COLUMNS overrides the ioctl.
 func termWidth() int {
-	fi, err := os.Stdout.Stat()
-	if err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+	if !isTerminal(os.Stdout) {
 		return 0
 	}
 	if n, err := strconv.Atoi(os.Getenv("COLUMNS")); err == nil && n > 0 {

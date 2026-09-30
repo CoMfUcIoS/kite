@@ -26,6 +26,9 @@ Run it from the directory that holds the repos, or pass `--root <dir>`.
 | Local state only, no GitHub                            | add `--no-pr`               |
 | Answer as data, not a table                            | add `--json`                |
 
+On a terminal kite pages long output through `less`; from a script or an agent's shell it never
+does. Add `--no-pager` if a terminal session ever waits on a pager.
+
 `--no-pr` also removes the `PR`, `RV` and `CI` columns and the indented PR rows. Leave it off
 for any question about PRs, reviews or CI.
 

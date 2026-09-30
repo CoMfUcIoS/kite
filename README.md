@@ -44,6 +44,13 @@ columns with a `…` in the middle, keeping each name's start and end, until the
 rows fit. It stops at 16 characters per column. Piped output and `--json` always
 carry the full names, and `COLUMNS` overrides the detected width.
 
+When the output is taller than the terminal, kite pages it the way git does:
+through `KITE_PAGER`, else `PAGER`, else `less`. A bare `less` runs as
+`less -FRX`, so output that fits one screen prints and exits as before, colour
+survives, and the table stays on screen after you quit. Pass `--no-pager`, or
+set `KITE_PAGER` to `cat` or an empty string, to turn it off. Pipes and `--json`
+are never paged.
+
 ## Usage
 
 ```
@@ -60,6 +67,7 @@ kite path [filter]       print one repo path, for: cd $(kite path api)
 --no-pr                  skip the GitHub lookups
 --delete                 prune only: actually delete the branches
 --force                  prune only: also delete branches whose merge is unconfirmed
+--no-pager               print straight to the terminal, skipping the pager
 --json                   one JSON document on stdout instead of the table
 --version                print the version
 -h, --help               usage
