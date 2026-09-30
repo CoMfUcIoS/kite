@@ -102,6 +102,7 @@ func main() {
 		}
 		return
 	}
+	paths = withWorktrees(paths)
 
 	// Only status and update render the conflict marker; prune and stash
 	// would pay for a merge-tree per repo and never show it.
@@ -499,8 +500,10 @@ func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
 	}
 
 	dirty, stashes := 0, 0
-	var oldestFetch time.Time
 	var broken []Repo
+	// FETCH_HEAD is per worktree but origin/* refs are shared, so a group is
+	// as fresh as its newest fetch.
+	newestFetch := map[string]time.Time{}
 
 	for _, r := range repos {
 		if r.Err != nil {
@@ -513,8 +516,8 @@ func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
 		if !r.Follower {
 			stashes += r.Stashes
 		}
-		if !r.FetchedAt.IsZero() && (oldestFetch.IsZero() || r.FetchedAt.Before(oldestFetch)) {
-			oldestFetch = r.FetchedAt
+		if k := groupKey(r); r.FetchedAt.After(newestFetch[k]) {
+			newestFetch[k] = r.FetchedAt
 		}
 		addRow(txt(r.Name), r.branchCell(), r.dirtyCell(),
 			upstreamCell(r.Ahead, r.Behind, r.NoUpstream),
@@ -533,6 +536,13 @@ func printTable(w io.Writer, repos []Repo, afterUpdate bool, note string) {
 		}
 	}
 	renderGrid(w, rows, 2)
+
+	var oldestFetch time.Time
+	for _, t := range newestFetch {
+		if oldestFetch.IsZero() || t.Before(oldestFetch) {
+			oldestFetch = t
+		}
+	}
 
 	// Errors go below the grid rather than inside it: one long git message must
 	// not stretch the BRANCH column for every healthy repo.

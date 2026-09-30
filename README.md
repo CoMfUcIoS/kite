@@ -53,8 +53,9 @@ kite path [filter]       print one repo path, for: cd $(kite path api)
 -h, --help               usage
 ```
 
-`kite` lists the repos found directly inside a directory, one level down, so run
-it from the folder your checkouts live in or point `--root` at it. `NO_COLOR`
+`kite` lists the repos found directly inside a directory, one level down, plus
+every linked worktree of those repos wherever it lives. Run it from the folder
+your checkouts live in or point `--root` at it. `NO_COLOR`
 disables color, as does piping the output anywhere.
 
 `filter` matches a repo name or a current branch name, case-insensitively:
@@ -148,6 +149,11 @@ its own branch, dirty count and PR. A blank `STASH` on a worktree row isn't zero
 the count sits on the main checkout's row. `stash` and `prune` list each stash
 and branch once.
 
+A worktree kept outside the root, say in a `_worktrees` folder, still shows up.
+kite asks `git worktree list` for every repo that has linked worktrees, and a
+worktree in the root pulls in its main checkout the same way. A worktree whose
+directory was deleted is skipped.
+
 ## Jumping between repos
 
 ```
@@ -155,8 +161,9 @@ $ cd $(kite path grafana)
 ```
 
 A process cannot change its parent's directory, so there is no `kite cd`. `path`
-prints the directory instead and lets the shell do the moving. It matches repo
-names only, which means it needs no git calls at all and returns instantly.
+prints the directory instead and lets the shell do the moving. It matches the
+names of directories in the root only, which means it needs no git calls at all
+and returns instantly. Worktrees kept elsewhere aren't found by `path`.
 
 If the filter matches more than one repo it fails rather than printing a list,
 because handing `cd` two arguments produces an error that explains nothing:
