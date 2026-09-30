@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.0](https://github.com/CoMfUcIoS/kite/compare/v0.9.1...v0.10.0) (2026-09-30)
+
+
+### Features
+
+* add createdAt to stash --json ([#23](https://github.com/CoMfUcIoS/kite/issues/23)) ([4e68822](https://github.com/CoMfUcIoS/kite/commit/4e6882287ed8297d6912c985f1ea4c170ab68835))
+* fit the status table to the terminal width ([#24](https://github.com/CoMfUcIoS/kite/issues/24)) ([01162d4](https://github.com/CoMfUcIoS/kite/commit/01162d4d2b05ddabab87ca9f5476bafc5f767bb3))
+
 ## [0.9.1](https://github.com/CoMfUcIoS/kite/compare/v0.9.0...v0.9.1) (2026-09-30)
 
 
