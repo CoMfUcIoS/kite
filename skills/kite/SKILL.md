@@ -35,6 +35,9 @@ rather than guessing when more than one repo matches.
 
 ## Reading the table
 
+`kite --help` ends with a legend for every glyph and every `--json` value. Check it rather than
+guessing at a symbol.
+
 - `DIRTY` is modified plus untracked files. `STASH` is the stash count.
 - `↑↓` is ahead/behind the branch's own upstream. `·` means there's nothing to compare against.
   `rewritten` means someone force-pushed the upstream and the local branch is its old version.

@@ -44,6 +44,36 @@ flags:
 the PR, RV and CI columns appear only when there is something to put in them, so a
 machine without gh installed or authenticated simply does not show them. --no-pr
 skips every GitHub lookup, including the review queue.
+
+reading the table:
+  DIRTY     modified plus untracked files in that checkout
+  ↑↓        ahead/behind the branch's own upstream: ↑2↓3 is 2 ahead, 3 behind.
+            - level with it, · nothing to compare against, rewritten means
+            the upstream was force-pushed and this is its old copy, so don't
+            push it
+  vs MAIN   commits behind origin/<default>; a trailing ! means merging it in
+            would conflict. - level with main, blank unknown
+  STASH     stash count, shown on the main checkout's row only
+  LAST      age of the newest commit (m, h, d, w)
+  PR        your open PR for the branch
+  RV        ✓ approved, ✗ changes requested, · waiting on reviewers, ✎ draft
+  CI        ✓ passing, ○ pending, ✗ failing, followed by the first failing check
+  ├ └       in REPO: a linked worktree of the repo above it
+  ↳         in BRANCH: your open PR on a branch nobody has checked out
+
+--json values:
+  pr.ci         pass, fail, pending, or "" with no checks
+  pr.review     approved, changes, required, draft, or ""
+  pr.failing    the first failing check, present only when ci is fail
+  worktreeOf    the main checkout's name, on worktree rows only; those rows
+                carry no stashes key
+  rewritten     true when the upstream was force-pushed over this branch
+  timing        totalMs, gitMs and githubMs for the run
+  prune verdict merged, pr-merged, unverified, current, error
+  prune action  would delete, would remove worktree and delete, deleted,
+                needs --force, skipped, failed
+  Keys with nothing to say (pr, otherPRs, error, unknown times) are left out
+  rather than set to null.
 `
 
 type opts struct {
