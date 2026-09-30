@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.9.0](https://github.com/CoMfUcIoS/kite/compare/v0.8.0...v0.9.0) (2026-09-30)
+
+
+### Features
+
+* show which directories prune would remove ([#19](https://github.com/CoMfUcIoS/kite/issues/19)) ([c821691](https://github.com/CoMfUcIoS/kite/commit/c821691ad2265514357df2b9f90439245bb57eab))
+
+
+### Bug Fixes
+
+* mark PR sub-rows with ↳ so they don't look like worktrees ([#17](https://github.com/CoMfUcIoS/kite/issues/17)) ([c516340](https://github.com/CoMfUcIoS/kite/commit/c516340545531ed1bdb3d6dae9dac73eb7b1351a))
+
 ## [0.8.0](https://github.com/CoMfUcIoS/kite/compare/v0.7.0...v0.8.0) (2026-09-30)
 
 
