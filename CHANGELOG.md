@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.5.0](https://github.com/CoMfUcIoS/kite/compare/v0.4.0...v0.5.0) (2026-09-30)
+
+
+### Features
+
+* add claude-code skill and fix gitignore ([3037e71](https://github.com/CoMfUcIoS/kite/commit/3037e71719a136c7de5c858e588762aef8e48e6e))
+* follow linked worktrees outside the root ([#6](https://github.com/CoMfUcIoS/kite/issues/6)) ([446f724](https://github.com/CoMfUcIoS/kite/commit/446f724f44c202ba1dcea7aa09723f7523b67968))
+* report shared worktree state once per repo ([#5](https://github.com/CoMfUcIoS/kite/issues/5)) ([618ba3a](https://github.com/CoMfUcIoS/kite/commit/618ba3a6e2d5e76dc2a45a5aa04d13a9fcc70a3a))
+
+
+### Bug Fixes
+
+* count worktrees apart from repos in the footer ([6a683d3](https://github.com/CoMfUcIoS/kite/commit/6a683d3b21fa2d0bffd092d1c785b83315a1d704))
+* update each shared git dir once and mark worktree rows ([#7](https://github.com/CoMfUcIoS/kite/issues/7)) ([e933550](https://github.com/CoMfUcIoS/kite/commit/e9335503354288b15d99e822fced09d3219cd33d))
+
 ## [0.4.0](https://github.com/CoMfUcIoS/kite/compare/v0.3.0...v0.4.0) (2026-09-10)
 
 
