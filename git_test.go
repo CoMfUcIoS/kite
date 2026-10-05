@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -1679,7 +1680,7 @@ func TestStaleBranchesAllOncePerGroup(t *testing.T) {
 	repos := collectAll([]string{clone, wt}, false)
 	markLeaders(repos)
 	var names []string
-	for _, b := range staleBranchesAll(repos, false) {
+	for _, b := range staleBranchesAll(repos, false, false) {
 		names = append(names, b.Repo+":"+b.Name)
 	}
 	// wt was branched from main, so it counts as merged too; it is listed as checked out.
@@ -2355,7 +2356,7 @@ func liveMergedFixture(t *testing.T) (clone, wt string) {
 
 func TestScanBranchesKeepsLiveCandidates(t *testing.T) {
 	clone, wt := liveMergedFixture(t)
-	stale, live := scanBranches(collect(clone, false))
+	stale, live := scanBranches(collect(clone, false), false)
 	for _, b := range stale {
 		if b.Name == "shipped" {
 			t.Fatalf("a branch with a live upstream and no ancestry must not be stale: %+v", b)
@@ -2371,7 +2372,7 @@ func TestScanBranchesKeepsLiveCandidates(t *testing.T) {
 
 func TestMatchMergedFinishesBranchAtPRHead(t *testing.T) {
 	clone, wt := liveMergedFixture(t)
-	_, live := scanBranches(collect(clone, false))
+	_, live := scanBranches(collect(clone, false), false)
 	head := mustGit(t, clone, "rev-parse", "shipped")
 
 	got := matchMerged(live, []ghMergedPR{{Number: 7, HeadRefName: "shipped", HeadRefOid: head}}, clone)
@@ -2396,7 +2397,7 @@ func TestMatchMergedIgnoresNewWorkAndMissingPRs(t *testing.T) {
 	writeFile(t, wt, "more.txt", "more")
 	mustGit(t, wt, "add", ".")
 	mustGit(t, wt, "commit", "-qm", "after the merge")
-	_, live := scanBranches(collect(clone, false))
+	_, live := scanBranches(collect(clone, false), false)
 
 	if got := matchMerged(live, []ghMergedPR{{Number: 7, HeadRefName: "shipped", HeadRefOid: head}}, clone); len(got) != 0 {
 		t.Errorf("got %+v, want a branch with work beyond the PR head left alone", got)
@@ -2638,5 +2639,112 @@ func TestParseArgsNoPager(t *testing.T) {
 	o, err := parseArgs([]string{"--no-pager"})
 	if err != nil || !o.noPager {
 		t.Errorf("noPager = %v err = %v, want true", o.noPager, err)
+	}
+}
+
+// ignoredOnlyWorktree is a finished worktree whose only leftover is an ignored
+// build output.
+func ignoredOnlyWorktree(t *testing.T, clone, branch string) string {
+	t.Helper()
+	writeFile(t, clone, ".gitignore", "cover.out")
+	mustGit(t, clone, "add", ".gitignore")
+	mustGit(t, clone, "commit", "-qm", "ignore coverage")
+	mustGit(t, clone, "push", "-q", "origin", "HEAD:main")
+	wt := finishedWorktree(t, clone, branch)
+	writeFile(t, wt, "cover.out", "mode: set")
+	return wt
+}
+
+func TestPruneRecordsWhatKeepsAFinishedWorktree(t *testing.T) {
+	_, clone := workspace(t)
+	ignoredOnlyWorktree(t, clone, "done")
+
+	b := pruneOne(t, clone, "done")
+	if !b.Current || !slices.Equal(b.Blocked, []string{"cover.out"}) {
+		t.Errorf("Current=%v Blocked=%q, want the worktree kept and cover.out named", b.Current, b.Blocked)
+	}
+}
+
+func TestPruneIgnoredRemovesWorktreeHoldingOnlyIgnoredFiles(t *testing.T) {
+	_, clone := workspace(t)
+	wt := ignoredOnlyWorktree(t, clone, "done")
+
+	stale, _ := scanBranches(collect(clone, false), true)
+	var b Branch
+	for _, s := range stale {
+		if s.Name == "done" {
+			b = s
+		}
+	}
+	if b.Current || b.Worktree == "" || !slices.Equal(b.Ignored, []string{"cover.out"}) {
+		t.Fatalf("Current=%v Worktree=%q Ignored=%q, want a removable worktree that names cover.out", b.Current, b.Worktree, b.Ignored)
+	}
+	if err := deleteBranch(b); err != nil {
+		t.Fatalf("deleteBranch: %v", err)
+	}
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Errorf("worktree directory survived: %v", err)
+	}
+}
+
+func TestPruneIgnoredStillKeepsDirtyWorktree(t *testing.T) {
+	_, clone := workspace(t)
+	wt := ignoredOnlyWorktree(t, clone, "done")
+	writeFile(t, wt, "wip.txt", "wip")
+
+	stale, _ := scanBranches(collect(clone, false), true)
+	for _, b := range stale {
+		if b.Name == "done" && (!b.Current || b.Worktree != "" || !slices.Contains(b.Blocked, "wip.txt")) {
+			t.Errorf("Current=%v Worktree=%q Blocked=%q, want untracked work to keep the worktree even with --ignored", b.Current, b.Worktree, b.Blocked)
+		}
+	}
+}
+
+func TestPrintPruneNamesWhatKeepsTheWorktree(t *testing.T) {
+	branches := []Branch{{Repo: "app", Name: "done", Default: "main", Gone: true, PRNumber: 7, Current: true,
+		CheckedOutIn: "app-done", Blocked: []string{"cover.out", "bin/", "dist/", "tmp/"}}}
+	var buf bytes.Buffer
+	printPrune(&buf, runPrune(branches, false, false), false)
+	out := stripANSI(buf.String())
+	if !strings.Contains(out, "PR #7 merged, worktree app-done holds cover.out, bin/, dist/ +1 more") || !strings.Contains(out, "skipped") {
+		t.Errorf("prune should say the PR merged and what keeps the worktree:\n%s", out)
+	}
+}
+
+func TestPrintPruneNamesIgnoredFilesThatGo(t *testing.T) {
+	branches := []Branch{{Repo: "app", Name: "done", Default: "main", Merged: true, Worktree: "/w/app-done",
+		CheckedOutIn: "app-done", Ignored: []string{"cover.out"}}}
+	var buf bytes.Buffer
+	printPrune(&buf, runPrune(branches, false, false), false)
+	out := stripANSI(buf.String())
+	if !strings.Contains(out, "worktree /w/app-done with ignored cover.out") {
+		t.Errorf("prune should name the ignored files that go with the worktree:\n%s", out)
+	}
+}
+
+func TestParseArgsIgnored(t *testing.T) {
+	o, err := parseArgs([]string{"prune", "--ignored"})
+	if err != nil || !o.ignored {
+		t.Errorf("ignored = %v err = %v, want true", o.ignored, err)
+	}
+}
+
+func TestPruneDeletesMergedBranchWhenHeadIsBehind(t *testing.T) {
+	_, clone := workspace(t)
+	mustGit(t, clone, "switch", "-qc", "done")
+	writeFile(t, clone, "d.txt", "d")
+	mustGit(t, clone, "add", ".")
+	mustGit(t, clone, "commit", "-qm", "done work")
+	mustGit(t, clone, "push", "-q", "origin", "HEAD:main")
+	mustGit(t, clone, "push", "-q", "-u", "origin", "done")
+	mustGit(t, clone, "push", "-q", "origin", "--delete", "done")
+	mustGit(t, clone, "switch", "-q", "main") // local main never pulled, so HEAD lacks the work
+
+	b := pruneOne(t, clone, "done")
+	if !b.Merged {
+		t.Fatalf("Merged = false, want the branch seen as merged into origin/main")
+	}
+	if err := deleteBranch(b); err != nil {
+		t.Fatalf("deleteBranch: %v", err)
 	}
 }

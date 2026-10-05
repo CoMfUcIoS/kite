@@ -69,6 +69,9 @@ guessing at a symbol.
   directory. kite only offers it for a clean worktree (nothing modified, untracked or ignored)
   whose remote branch is gone or whose branch a merged PR of yours covers. The reason shows the
   directory, and `--json` has it as `worktree`. Say so when you show the user the list.
+- A finished worktree holding files is skipped, and the reason names them. `--ignored` also
+  removes worktrees whose only leftovers are ignored files; show the user those names, since a
+  local `.env` is ignored too. Modified or untracked files always keep the worktree.
 - "Clean up my branches" means: run `kite prune`, show the user the dry-run list, and ask. Run
   `--delete` or `--force` only after they say yes to that list.
 
