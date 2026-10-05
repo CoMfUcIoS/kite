@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/CoMfUcIoS/kite/compare/v0.11.0...v0.12.0) (2026-10-05)
+
+
+### Features
+
+* **prune:** name what keeps a finished worktree, and add --ignored ([#28](https://github.com/CoMfUcIoS/kite/issues/28)) ([a617b6f](https://github.com/CoMfUcIoS/kite/commit/a617b6fafac49b6173bbb3348d624e41e20d5253))
+
 ## [0.11.0](https://github.com/CoMfUcIoS/kite/compare/v0.10.0...v0.11.0) (2026-09-30)
 
 
