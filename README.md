@@ -67,6 +67,7 @@ kite path [filter]       print one repo path, for: cd $(kite path api)
 --no-pr                  skip the GitHub lookups
 --delete                 prune only: actually delete the branches
 --force                  prune only: also delete branches whose merge is unconfirmed
+--ignored                prune only: also remove worktrees whose only leftovers are ignored files
 --no-pager               print straight to the terminal, skipping the pager
 --json                   one JSON document on stdout instead of the table
 --version                print the version
@@ -162,6 +163,13 @@ go before you say yes. The same tiers apply, so an
 unconfirmed merge still needs `--force`. The main checkout is never removed, and
 neither is a worktree without a merged PR or a deleted remote branch to show its
 work is done.
+
+A finished worktree that still holds files is skipped, and the reason names
+them (`PR #12 merged, worktree app-done holds cover.out`). When every one of them
+is ignored, such as build output or a coverage file, `--ignored` lets prune
+remove it anyway, and the reason lists the ignored files that go with it. Check
+that list for a local `.env` before adding `--delete`. Modified or untracked
+files always keep the worktree.
 
 ## Finding forgotten work
 

@@ -542,6 +542,10 @@ type Branch struct {
 	// Worktree is a clean linked worktree holding the branch, which deleting
 	// the branch removes first. Set instead of Current.
 	Worktree string
+	// Blocked is what keeps a finished branch's worktree from being removed.
+	Blocked []string
+	// Ignored is the ignored files that go with Worktree, under --ignored.
+	Ignored []string
 	// holder is that worktree before there's proof the work finished.
 	holder string
 
@@ -587,12 +591,12 @@ func (b Branch) deletable(force bool) bool {
 	return false
 }
 
-func staleBranchesAll(repos []Repo, useGH bool) []Branch {
+func staleBranchesAll(repos []Repo, useGH, ignored bool) []Branch {
 	perRepo := make([][]Branch, len(repos))
 	live := make([][]Branch, len(repos))
 	fan(len(repos), func(i int) {
 		if !repos[i].Follower {
-			perRepo[i], live[i] = scanBranches(repos[i])
+			perRepo[i], live[i] = scanBranches(repos[i], ignored)
 			prog.tick()
 		}
 	})
@@ -606,7 +610,7 @@ func staleBranchesAll(repos []Repo, useGH bool) []Branch {
 	if useGH && ghAvailable() {
 		fan(len(all), func(i int) {
 			b := &all[i]
-			if b.Gone && !b.Merged && !b.Current {
+			if b.Gone && !b.Merged && (!b.Current || len(b.Blocked) > 0) {
 				b.PRNumber = mergedPR(b.Path, b.Name)
 			}
 		})
@@ -650,7 +654,7 @@ func matchMerged(live []Branch, prs []ghMergedPR, path string) []Branch {
 }
 
 func staleBranches(r Repo) []Branch {
-	stale, _ := scanBranches(r)
+	stale, _ := scanBranches(r, false)
 	return stale
 }
 
@@ -658,7 +662,7 @@ func staleBranches(r Repo) []Branch {
 // identifies a squash-merged branch only appears once the deleted remote branch
 // has been pruned locally. live holds pushed branches that are neither merged
 // by ancestry nor gone: only a merged PR can say those are finished.
-func scanBranches(r Repo) (stale, live []Branch) {
+func scanBranches(r Repo, ignored bool) (stale, live []Branch) {
 	fail := func(err error) ([]Branch, []Branch) {
 		return []Branch{{Repo: r.Name, Path: r.Path, Err: err}}, nil
 	}
@@ -695,8 +699,10 @@ func scanBranches(r Repo) (stale, live []Branch) {
 		// branch checked out, not only this one.
 		if wt := fields[2]; wt != "" {
 			b.CheckedOutIn = filepath.Base(wt)
-			if removableWorktree(wt, r.Path) {
-				b.holder = wt
+			if ok, blocked, ign := removableWorktree(wt, r.Path, ignored); ok {
+				b.holder, b.Ignored = wt, ign
+			} else {
+				b.Blocked = blocked
 			}
 			// Gone, not just merged: a worktree freshly branched from main
 			// also reads as merged, before any work has started in it.
@@ -722,18 +728,37 @@ func scanBranches(r Repo) (stale, live []Branch) {
 }
 
 // removableWorktree is a linked worktree other than the one kite runs git
-// from, with nothing uncommitted and nothing ignored: git worktree remove
-// deletes ignored files, a local .env included. The main checkout never
-// qualifies.
-func removableWorktree(wt, from string) bool {
+// from, with nothing uncommitted and, unless allowIgnored, nothing ignored:
+// git worktree remove deletes ignored files, a local .env included. The main
+// checkout never qualifies. It also returns the paths that keep the worktree,
+// or the ignored ones that would go with it.
+func removableWorktree(wt, from string, allowIgnored bool) (ok bool, blocked, ignored []string) {
 	if realPath(wt) == realPath(from) {
-		return false
+		return false, nil, nil
 	}
 	if fi, err := os.Stat(filepath.Join(wt, ".git")); err != nil || fi.IsDir() {
-		return false
+		return false, nil, nil
 	}
 	s, err := git(wt, "status", "--porcelain", "--ignored")
-	return err == nil && s == ""
+	if err != nil {
+		return false, nil, nil
+	}
+	for _, line := range strings.Split(s, "\n") {
+		// git trims the output, so the first line may have lost its leading space.
+		code, path, found := strings.Cut(strings.TrimSpace(line), " ")
+		if !found {
+			continue
+		}
+		if code == "!!" {
+			ignored = append(ignored, strings.TrimSpace(path))
+		} else {
+			blocked = append(blocked, strings.TrimSpace(path))
+		}
+	}
+	if len(blocked) == 0 && (len(ignored) == 0 || allowIgnored) {
+		return true, nil, ignored
+	}
+	return false, append(blocked, ignored...), nil
 }
 
 func deleteBranch(b Branch) error {
@@ -743,13 +768,15 @@ func deleteBranch(b Branch) error {
 			return err
 		}
 	}
-	// Ancestry-merged branches go through -d so git double-checks us. The rest
-	// need -D, because a squash merge leaves nothing for -d to verify.
-	flag := "-D"
+	// -d checks against HEAD once the upstream is gone, and HEAD may be any
+	// branch, so re-check ancestry against origin/<default> instead. A squash
+	// merge leaves nothing to check, which the verdict already accounted for.
 	if b.Merged {
-		flag = "-d"
+		if _, err := git(b.Path, "merge-base", "--is-ancestor", b.Name, "origin/"+b.Default); err != nil {
+			return fmt.Errorf("%s is no longer merged into origin/%s", b.Name, b.Default)
+		}
 	}
-	_, err := git(b.Path, "branch", flag, b.Name)
+	_, err := git(b.Path, "branch", "-D", b.Name)
 	return err
 }
 

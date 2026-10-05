@@ -39,6 +39,7 @@ flags:
   --no-pr                  skip the GitHub lookups
   --delete                 prune only: actually delete the branches
   --force                  prune only: also delete branches whose merge is unconfirmed
+--ignored                prune only: also remove worktrees whose only leftovers are ignored files
   --no-pager               print straight to the terminal instead of through the
                            pager (KITE_PAGER, then PAGER, then less)
   --json                   one JSON document on stdout instead of the table, for
@@ -100,6 +101,7 @@ type opts struct {
 	noPR    bool
 	delete  bool
 	force   bool
+	ignored bool
 	noPager bool
 	json    bool
 }
@@ -183,7 +185,7 @@ func main() {
 	switch o.cmd {
 	case "prune":
 		prog.phase("checking branches", leaders(repos))
-		branches := staleBranchesAll(repos, !o.noPR)
+		branches := staleBranchesAll(repos, !o.noPR, o.ignored)
 		prog.stop()
 		rows := runPrune(branches, o.delete, o.force)
 		if o.json {
@@ -343,6 +345,8 @@ func parseArgs(args []string) (opts, error) {
 			o.delete = true
 		case a == "--force", a == "-force":
 			o.force = true
+		case a == "--ignored", a == "-ignored":
+			o.ignored = true
 		case a == "--no-pager", a == "-no-pager":
 			o.noPager = true
 		case a == "--json", a == "-json":
@@ -1019,18 +1023,24 @@ func runPrune(branches []Branch, doDelete, force bool) []pruneRow {
 		}
 
 		var reason, action string
-		switch b.verdict() {
-		case pruneMerged:
+		switch {
+		case b.Merged:
 			reason = "merged into " + b.Default
-		case prunePR:
+		case b.PRNumber > 0:
 			reason = fmt.Sprintf("PR #%d merged", b.PRNumber)
-		case pruneCurrent:
-			reason = "checked out in " + b.CheckedOutIn
 		default:
 			reason = "upstream gone, merge unconfirmed"
 		}
-		if b.Worktree != "" {
+		switch {
+		case b.Current && len(b.Blocked) > 0 && (b.Gone || b.PRNumber > 0):
+			reason += ", worktree " + b.CheckedOutIn + " holds " + listPaths(b.Blocked)
+		case b.Current:
+			reason = "checked out in " + b.CheckedOutIn
+		case b.Worktree != "":
 			reason += ", worktree " + tilde(b.Worktree)
+			if len(b.Ignored) > 0 {
+				reason += " with ignored " + listPaths(b.Ignored)
+			}
 		}
 
 		switch {
@@ -1053,6 +1063,15 @@ func runPrune(branches []Branch, doDelete, force bool) []pruneRow {
 		rows = append(rows, pruneRow{b, reason, action})
 	}
 	return rows
+}
+
+// listPaths names the first few paths and counts the rest.
+func listPaths(paths []string) string {
+	const shown = 3
+	if len(paths) <= shown {
+		return strings.Join(paths, ", ")
+	}
+	return fmt.Sprintf("%s +%d more", strings.Join(paths[:shown], ", "), len(paths)-shown)
 }
 
 func printPrune(w io.Writer, prs []pruneRow, doDelete bool) {
